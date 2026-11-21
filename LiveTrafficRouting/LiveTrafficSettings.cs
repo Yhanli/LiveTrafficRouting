@@ -59,6 +59,7 @@ namespace LiveTrafficRouting
         private Tuning m_Tuning;
         private bool m_LogStatistics;
         private bool m_ShowStatistics;
+        private bool m_KeepRunningOnPopups;
         // The last preset picked in the dropdown, also while loading. Used to re-apply a preset whose values
         // changed in a mod update (otherwise the old saved slider values would turn it into "Custom").
         private TrafficAwareness m_PickedAwareness;
@@ -152,6 +153,22 @@ namespace LiveTrafficRouting
             }
         }
 
+        // Milestone ("city upgrade") popups pause the game, which stops a statistics test. Only shown with the panel on.
+        [SettingsUISection(GeneralSection, DebugGroup)]
+        [SettingsUIHideByCondition(typeof(LiveTrafficSettings), nameof(IsStatisticsOff))]
+        public bool KeepRunningOnPopups
+        {
+            get => m_KeepRunningOnPopups;
+            set
+            {
+                if (m_KeepRunningOnPopups == value) return;
+                m_KeepRunningOnPopups = value;
+                Save();
+            }
+        }
+
+        public bool IsStatisticsOff() => !m_ShowStatistics;
+
 
         [SettingsUISection(GeneralSection, DebugGroup)]
         public bool LogStatistics
@@ -226,6 +243,7 @@ namespace LiveTrafficRouting
             m_Tuning = kBalanced;
             m_LogStatistics = false;
             m_ShowStatistics = false;
+            m_KeepRunningOnPopups = true;
             m_PickedAwareness = TrafficAwareness.Balanced;
             m_IsLoadingDefaults = false;
         }

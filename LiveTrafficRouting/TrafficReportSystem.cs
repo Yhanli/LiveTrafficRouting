@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using Colossal.Serialization.Entities;
 using Game;
 using Game.City;
@@ -7,6 +9,7 @@ using Game.Net;
 using Game.Objects;
 using Game.Simulation;
 using Game.Tools;
+using Game.UI;
 using Game.Vehicles;
 using Unity.Burst;
 using Unity.Burst.Intrinsics;
@@ -20,6 +23,11 @@ using PersonalCar = Game.Vehicles.PersonalCar;
 using DeliveryTruck = Game.Vehicles.DeliveryTruck;
 using Taxi = Game.Vehicles.Taxi;
 using Transform = Game.Objects.Transform;
+using Owner = Game.Common.Owner;
+using Aggregated = Game.Net.Aggregated;
+using Aggregate = Game.Net.Aggregate;
+using NetNode = Game.Net.Node;
+using ConnectedEdge = Game.Net.ConnectedEdge;
 
 namespace LiveTrafficRouting
 {
@@ -47,9 +55,26 @@ namespace LiveTrafficRouting
             public uint m_Frame;
         }
 
+        /// <summary>
+        /// The "place" of a lane, for the hotspot list: the named street (aggregate) of a road segment, or the
+        /// junction (node) for lanes inside an intersection. Burst-compatible.
+        /// </summary>
+        private static Entity PlaceOf(Entity lane, ref ComponentLookup<Owner> ownerData, ref ComponentLookup<Aggregated> aggregatedData)
+        {
+            if (!ownerData.TryGetComponent(lane, out Owner owner)) return Entity.Null;
+            if (aggregatedData.TryGetComponent(owner.m_Owner, out Aggregated aggregated) && aggregated.m_Aggregate != Entity.Null)
+            {
+                return aggregated.m_Aggregate;
+            }
+            return owner.m_Owner;
+        }
+
         [BurstCompile]
         private struct SampleVehiclesJob : IJobChunk
         {
+            [ReadOnly] public ComponentLookup<Owner> m_OwnerData;
+            [ReadOnly] public ComponentLookup<Aggregated> m_AggregatedData;
+            public NativeParallelHashMap<Entity, int> m_PlaceQueued;
             [ReadOnly] public EntityTypeHandle m_EntityType;
             [ReadOnly] public ComponentTypeHandle<Moving> m_MovingType;
             [ReadOnly] public ComponentTypeHandle<CarCurrentLane> m_CurrentLaneType;
@@ -87,7 +112,16 @@ namespace LiveTrafficRouting
                     if (blockers.Length != 0)
                     {
                         Blocker blocker = blockers[i];
-                        if (blocker.m_Type == BlockerType.Continuing && blocker.m_Blocker != Entity.Null && speed < 1f) m_Stats[2] += 1;
+                        if (blocker.m_Type == BlockerType.Continuing && blocker.m_Blocker != Entity.Null && speed < 1f)
+                        {
+                            m_Stats[2] += 1;
+                            Entity place = PlaceOf(lanes[i].m_Lane, ref m_OwnerData, ref m_AggregatedData);
+                            if (place != Entity.Null)
+                            {
+                                m_PlaceQueued.TryGetValue(place, out int n);
+                                m_PlaceQueued[place] = n + 1;
+                            }
+                        }
                     }
                     if (lane.m_SpeedLimit <= kLocalStreetLimit && (lane.m_Flags & NetLaneFlags.Highway) == 0) m_Stats[3] += 1;
 
@@ -115,16 +149,28 @@ namespace LiveTrafficRouting
         [BurstCompile]
         private struct CountJamsJob : IJobChunk
         {
+            [ReadOnly] public EntityTypeHandle m_EntityType;
             [ReadOnly] public ComponentTypeHandle<Bottleneck> m_BottleneckType;
+            [ReadOnly] public ComponentLookup<Owner> m_OwnerData;
+            [ReadOnly] public ComponentLookup<Aggregated> m_AggregatedData;
             public NativeArray<double> m_Stats;
+            public NativeParallelHashMap<Entity, int> m_PlaceJams;
 
             public void Execute(in ArchetypeChunk chunk, int unfilteredChunkIndex, bool useEnabledMask, in v128 chunkEnabledMask)
             {
+                NativeArray<Entity> entities = chunk.GetNativeArray(m_EntityType);
                 NativeArray<Bottleneck> bottlenecks = chunk.GetNativeArray(ref m_BottleneckType);
                 for (int i = 0; i < bottlenecks.Length; i++)
                 {
                     // The game shows the jam warning once the timer reaches 20 (see TrafficBottleneckSystem).
-                    if (bottlenecks[i].m_Timer >= 20) m_Stats[8] += 1;
+                    if (bottlenecks[i].m_Timer < 20) continue;
+                    m_Stats[8] += 1;
+                    Entity place = PlaceOf(entities[i], ref m_OwnerData, ref m_AggregatedData);
+                    if (place != Entity.Null)
+                    {
+                        m_PlaceJams.TryGetValue(place, out int n);
+                        m_PlaceJams[place] = n + 1;
+                    }
                 }
             }
         }
@@ -159,6 +205,8 @@ namespace LiveTrafficRouting
             public string Settings = "";
             // Not recorded: the hour started before we were counting (game loaded, settings changed, reset).
             public bool Partial;
+            // Per place (street or junction): queued vehicles and jam warnings, summed over the samples.
+            public readonly Dictionary<Entity, float2> Places = new Dictionary<Entity, float2>();
             public float NavSharePct;
         }
 
@@ -186,6 +234,12 @@ namespace LiveTrafficRouting
         private ComponentLookup<Transform> m_TransformData;
 
         private NativeParallelHashMap<Entity, TripState> m_Trips;
+        private NativeParallelHashMap<Entity, int> m_PlaceQueued;
+        private NativeParallelHashMap<Entity, int> m_PlaceJams;
+        private ComponentLookup<Owner> m_OwnerData;
+        private ComponentLookup<Aggregated> m_AggregatedData;
+        private NameSystem m_NameSystem;
+        private const int kHotspotsPerHour = 15;
         private NativeArray<double> m_Stats;
         private JobHandle m_LastJob;
         private bool m_HasPendingSample;
@@ -209,6 +263,7 @@ namespace LiveTrafficRouting
             m_SimulationSystem = World.GetOrCreateSystemManaged<SimulationSystem>();
             m_TimeSystem = World.GetOrCreateSystemManaged<TimeSystem>();
             m_CityConfigurationSystem = World.GetOrCreateSystemManaged<CityConfigurationSystem>();
+            m_NameSystem = World.GetOrCreateSystemManaged<NameSystem>();
             m_VanillaFlowSystem = World.GetOrCreateSystemManaged<TrafficFlowSystem>();
             m_FlowSystem = World.GetOrCreateSystemManaged<LiveTrafficFlowSystem>();
             m_RerouteSystem = World.GetOrCreateSystemManaged<RerouteSystem>();
@@ -242,6 +297,10 @@ namespace LiveTrafficRouting
             m_TransformData = GetComponentLookup<Transform>(true);
 
             m_Trips = new NativeParallelHashMap<Entity, TripState>(16384, Allocator.Persistent);
+            m_PlaceQueued = new NativeParallelHashMap<Entity, int>(1024, Allocator.Persistent);
+            m_PlaceJams = new NativeParallelHashMap<Entity, int>(256, Allocator.Persistent);
+            m_OwnerData = GetComponentLookup<Owner>(true);
+            m_AggregatedData = GetComponentLookup<Aggregated>(true);
             m_Stats = new NativeArray<double>(kSampleStats, Allocator.Persistent);
             Logger.Info("TrafficReportSystem created.");
         }
@@ -250,6 +309,8 @@ namespace LiveTrafficRouting
         {
             m_LastJob.Complete();
             m_Trips.Dispose();
+            m_PlaceQueued.Dispose();
+            m_PlaceJams.Dispose();
             m_Stats.Dispose();
             base.OnDestroy();
         }
@@ -280,6 +341,7 @@ namespace LiveTrafficRouting
         {
             LiveTrafficSettings settings = Mod.Settings;
             TrafficReportStore.CurrentCity = m_CityConfigurationSystem.cityName ?? "";
+            PopupGuard.Update(settings);
 
             // Statistics are for traffic geeks: when the panel is off, record nothing at all.
             if (settings != null && !settings.ShowStatistics)
@@ -352,10 +414,22 @@ namespace LiveTrafficRouting
             m_BottleneckType.Update(this);
             m_CarLaneData.Update(this);
             m_TransformData.Update(this);
+            m_OwnerData.Update(this);
+            m_AggregatedData.Update(this);
+            m_PlaceQueued.Clear();
+            m_PlaceJams.Clear();
 
             uint frame = m_SimulationSystem.frameIndex;
             JobHandle handle = new PruneTripsJob { m_Trips = m_Trips, m_Frame = frame }.Schedule(Dependency);
-            handle = new CountJamsJob { m_BottleneckType = m_BottleneckType, m_Stats = m_Stats }.Schedule(m_BottleneckQuery, handle);
+            handle = new CountJamsJob
+            {
+                m_EntityType = m_EntityType,
+                m_BottleneckType = m_BottleneckType,
+                m_OwnerData = m_OwnerData,
+                m_AggregatedData = m_AggregatedData,
+                m_Stats = m_Stats,
+                m_PlaceJams = m_PlaceJams,
+            }.Schedule(m_BottleneckQuery, handle);
             handle = new SampleVehiclesJob
             {
                 m_EntityType = m_EntityType,
@@ -369,6 +443,9 @@ namespace LiveTrafficRouting
                 m_TaxiType = m_TaxiType,
                 m_CarLaneData = m_CarLaneData,
                 m_TransformData = m_TransformData,
+                m_OwnerData = m_OwnerData,
+                m_AggregatedData = m_AggregatedData,
+                m_PlaceQueued = m_PlaceQueued,
                 m_Trips = m_Trips,
                 m_Stats = m_Stats,
                 m_Frame = frame,
@@ -382,6 +459,8 @@ namespace LiveTrafficRouting
 
         private void AddSampleToHour()
         {
+            AddPlaces(m_PlaceQueued, 0);
+            AddPlaces(m_PlaceJams, 1);
             HourAccumulator h = m_Hour;
             double vehicles = m_Stats[0];
             h.Mode = m_PendingMode;
@@ -419,6 +498,74 @@ namespace LiveTrafficRouting
                 NavSharePct = m_PendingSharePct,
                 ModMs = LastModMs(),
             });
+        }
+
+        private void AddPlaces(NativeParallelHashMap<Entity, int> map, int component)
+        {
+            if (map.IsEmpty) return;
+            NativeKeyValueArrays<Entity, int> kv = map.GetKeyValueArrays(Allocator.Temp);
+            for (int i = 0; i < kv.Length; i++)
+            {
+                m_Hour.Places.TryGetValue(kv.Keys[i], out float2 v);
+                v[component] += kv.Values[i];
+                m_Hour.Places[kv.Keys[i]] = v;
+            }
+            kv.Dispose();
+        }
+
+        /// <summary>The busiest places of the hour by queued vehicles (jam warnings weigh in too), with names.</summary>
+        private List<HotspotRow> TopPlaces(HourAccumulator h, TrafficCapture capture)
+        {
+            var rows = new List<HotspotRow>();
+            if (h.Places.Count == 0) return rows;
+            float samples = Math.Max(1, h.Samples);
+            foreach (KeyValuePair<Entity, float2> kv in h.Places.OrderByDescending(p => p.Value.x + 5f * p.Value.y).Take(kHotspotsPerHour * 2))
+            {
+                if (!EntityManager.Exists(kv.Key)) continue;
+                string kind;
+                string name;
+                if (EntityManager.HasComponent<Aggregate>(kv.Key))
+                {
+                    kind = "street";
+                    name = m_NameSystem.GetRenderedLabelName(kv.Key);
+                }
+                else if (EntityManager.HasComponent<NetNode>(kv.Key))
+                {
+                    kind = "junction";
+                    name = JunctionName(kv.Key);
+                }
+                else continue; // parking lots, buildings, etc.
+                rows.Add(new HotspotRow
+                {
+                    RunId = capture.RunId,
+                    City = capture.City,
+                    GameTime = capture.GameTime,
+                    Place = string.IsNullOrEmpty(name) ? "(unnamed)" : name,
+                    Kind = kind,
+                    Queued = kv.Value.x / samples,
+                    Jams = kv.Value.y / samples,
+                });
+                if (rows.Count >= kHotspotsPerHour) break;
+            }
+            return rows;
+        }
+
+        /// <summary>"Street A / Street B" from the streets that meet at a junction.</summary>
+        private string JunctionName(Entity node)
+        {
+            if (!EntityManager.HasBuffer<ConnectedEdge>(node)) return "Junction";
+            DynamicBuffer<ConnectedEdge> edges = EntityManager.GetBuffer<ConnectedEdge>(node, true);
+            var names = new List<string>();
+            for (int i = 0; i < edges.Length && names.Count < 3; i++)
+            {
+                Entity edge = edges[i].m_Edge;
+                if (!EntityManager.HasComponent<Aggregated>(edge)) continue;
+                Entity agg = EntityManager.GetComponentData<Aggregated>(edge).m_Aggregate;
+                if (agg == Entity.Null) continue;
+                string n = m_NameSystem.GetRenderedLabelName(agg);
+                if (!string.IsNullOrEmpty(n) && !names.Contains(n)) names.Add(n);
+            }
+            return names.Count == 0 ? "Junction" : names.Count == 1 ? names[0] + " (junction)" : string.Join(" / ", names);
         }
 
         private void FinishHour(LiveTrafficSettings settings)
@@ -476,6 +623,14 @@ namespace LiveTrafficRouting
                 ModMs = LastModMs(),
             };
             TrafficReportStore.Add(capture);
+            try
+            {
+                TrafficReportStore.AddHotspots(TopPlaces(h, capture));
+            }
+            catch (Exception e)
+            {
+                Logger.Warn($"Could not record traffic hotspots: {e.Message}");
+            }
             if (settings != null && settings.LogStatistics) Logger.Info(capture.ToLogLine());
         }
 

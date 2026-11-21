@@ -209,6 +209,43 @@ namespace LiveTrafficRouting
         }
     }
 
+    /// <summary>One busy place (street or junction) in one game hour of one run.</summary>
+    internal sealed class HotspotRow
+    {
+        public string RunId = "";
+        public string City = "";
+        public string GameTime = "";
+        public string Place = "";
+        public string Kind = "";       // "street" or "junction"
+        public float Queued;           // average vehicles waiting in a queue there
+        public float Jams;             // average jam warnings there
+
+        internal const string Header = "run_id,city,game_time,place,kind,queued,jams";
+
+        internal string ToCsv() => string.Join(",", new[]
+        {
+            Esc(RunId), Esc(City), Esc(GameTime), Esc(Place), Kind,
+            Queued.ToString("0.###", CultureInfo.InvariantCulture), Jams.ToString("0.###", CultureInfo.InvariantCulture),
+        });
+
+        internal static HotspotRow FromCsv(string line, List<string> header)
+        {
+            if (string.IsNullOrWhiteSpace(line)) return null;
+            List<string> f = TrafficCapture.SplitCsv(line);
+            string Get(string name) { int i = header.IndexOf(name); return i >= 0 && i < f.Count ? f[i] : ""; }
+            float.TryParse(Get("queued"), NumberStyles.Float, CultureInfo.InvariantCulture, out float q);
+            float.TryParse(Get("jams"), NumberStyles.Float, CultureInfo.InvariantCulture, out float j);
+            var r = new HotspotRow { RunId = Get("run_id"), City = Get("city"), GameTime = Get("game_time"), Place = Get("place"), Kind = Get("kind"), Queued = q, Jams = j };
+            return string.IsNullOrEmpty(r.Place) ? null : r;
+        }
+
+        private static string Esc(string s)
+        {
+            if (s == null) return "";
+            return s.IndexOfAny(new[] { ',', '"', '\n', '\r' }) < 0 ? s : "\"" + s.Replace("\"", "\"\"") + "\"";
+        }
+    }
+
     /// <summary>The live numbers for "right now".</summary>
     internal sealed class TrafficSnapshot
     {
@@ -258,6 +295,10 @@ namespace LiveTrafficRouting
         private const int kMaxUiCaptures = 24 * 60;
 
         private static readonly List<TrafficCapture> s_Captures = new List<TrafficCapture>();
+        private static readonly List<HotspotRow> s_Hotspots = new List<HotspotRow>();
+        // Up to 15 rows per game hour, so a larger cap than the captures.
+        private const int kMaxHotspotRows = 150000;
+        private const int kKeepHotspotRows = 90000;
         private static bool s_Loaded;
 
         public static TrafficSnapshot Current { get; private set; } = new TrafficSnapshot();
@@ -267,6 +308,7 @@ namespace LiveTrafficRouting
 
         public static string Directory_ => Path.Combine(UnityEngine.Application.persistentDataPath, "ModsData", nameof(LiveTrafficRouting));
         public static string FilePath => Path.Combine(Directory_, "captures.csv");
+        public static string HotspotPath => Path.Combine(Directory_, "hotspots.csv");
 
         public static TrafficCapture Last => s_Captures.Count > 0 ? s_Captures[s_Captures.Count - 1] : null;
 
@@ -296,6 +338,86 @@ namespace LiveTrafficRouting
             {
                 Logger.Warn($"Could not write traffic capture: {e.Message}");
             }
+        }
+
+        public static void AddHotspots(List<HotspotRow> rows)
+        {
+            if (rows == null || rows.Count == 0) return;
+            EnsureLoaded();
+            s_Hotspots.AddRange(rows);
+            Version++;
+            try
+            {
+                Directory.CreateDirectory(Directory_);
+                bool writeHeader = !File.Exists(HotspotPath);
+                using (var w = new StreamWriter(HotspotPath, append: true, Encoding.UTF8))
+                {
+                    if (writeHeader) w.WriteLine(HotspotRow.Header);
+                    foreach (HotspotRow r in rows) w.WriteLine(r.ToCsv());
+                }
+                if (s_Hotspots.Count > kMaxHotspotRows) TrimHotspots();
+            }
+            catch (Exception e)
+            {
+                Logger.Warn($"Could not write traffic hotspots: {e.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Busiest places per run of the current city: {"runId":[{p,k,q,j,h}]}. Averages over all game hours of the
+        /// run (an hour where a place wasn't in the top list counts as 0 there).
+        /// </summary>
+        public static string HotspotsJson(int perRun)
+        {
+            EnsureLoaded();
+            var hours = new Dictionary<string, int>();
+            foreach (TrafficCapture c in s_Captures)
+            {
+                if (c.City != CurrentCity) continue;
+                hours.TryGetValue(c.RunId, out int n);
+                hours[c.RunId] = n + 1;
+            }
+            var perRunPlaces = new Dictionary<string, Dictionary<string, float[]>>();
+            var kinds = new Dictionary<string, string>();
+            foreach (HotspotRow r in s_Hotspots)
+            {
+                if (r.City != CurrentCity || !hours.ContainsKey(r.RunId)) continue;
+                if (!perRunPlaces.TryGetValue(r.RunId, out Dictionary<string, float[]> places))
+                {
+                    places = new Dictionary<string, float[]>();
+                    perRunPlaces[r.RunId] = places;
+                }
+                if (!places.TryGetValue(r.Place, out float[] v)) { v = new float[3]; places[r.Place] = v; }
+                v[0] += r.Queued; v[1] += r.Jams; v[2] += 1;
+                kinds[r.Place] = r.Kind;
+            }
+            var sb = new StringBuilder("{");
+            bool firstRun = true;
+            foreach (KeyValuePair<string, Dictionary<string, float[]>> run in perRunPlaces)
+            {
+                float runHours = Math.Max(1, hours[run.Key]);
+                if (!firstRun) sb.Append(',');
+                firstRun = false;
+                sb.Append('"');
+                foreach (char ch in run.Key) if (ch != '"' && ch != '\\') sb.Append(ch);
+                sb.Append("\":[");
+                bool firstPlace = true;
+                foreach (KeyValuePair<string, float[]> p in run.Value.OrderByDescending(x => x.Value[0] + 5f * x.Value[1]).Take(perRun))
+                {
+                    if (!firstPlace) sb.Append(',');
+                    firstPlace = false;
+                    sb.Append('{');
+                    TrafficCapture.Str(sb, "p", p.Key);
+                    TrafficCapture.Str(sb, "k", kinds.TryGetValue(p.Key, out string k) ? k : "");
+                    TrafficCapture.Num(sb, "q", p.Value[0] / runHours);
+                    TrafficCapture.Num(sb, "j", p.Value[1] / runHours);
+                    TrafficCapture.Num(sb, "h", p.Value[2], last: true);
+                    sb.Append('}');
+                }
+                sb.Append(']');
+            }
+            sb.Append('}');
+            return sb.ToString();
         }
 
         // ---------------- Runs ----------------
@@ -371,17 +493,28 @@ namespace LiveTrafficRouting
         public static int DeleteLiveRuns() => Delete(c => c.City == CurrentCity && c.Mode == "Live", "all live runs of this city");
         public static int DeleteRun(string runId) => Delete(c => c.City == CurrentCity && c.RunId == runId, "run " + runId);
 
+        private static void DeleteHotspotsOfRuns(HashSet<string> runIds, string city)
+        {
+            int removed = s_Hotspots.RemoveAll(h => h.City == city && runIds.Contains(h.RunId));
+            if (removed == 0) return;
+            CopyAside(HotspotPath, "hotspots-backup-");
+            RewriteHotspots();
+        }
+
         /// <summary>Removes matching captures from memory and the file. A backup of the file is kept first.</summary>
         private static int Delete(Predicate<TrafficCapture> match, string what)
         {
             EnsureLoaded();
+            var runIds = new HashSet<string>(s_Captures.Where(c => match(c)).Select(c => c.RunId));
+            string city = CurrentCity;
             int removed = s_Captures.RemoveAll(match);
             Version++;
             if (removed == 0) return 0;
             try
             {
-                string backup = CopyAside("captures-backup-");
+                string backup = CopyAside(FilePath, "captures-backup-");
                 RewriteFile();
+                DeleteHotspotsOfRuns(runIds, city);
                 Logger.Info($"Deleted {what}: {removed} game hours. Backup: {backup}");
             }
             catch (Exception e)
@@ -414,7 +547,7 @@ namespace LiveTrafficRouting
                 // Older format (different columns): rewrite once in the current format, keeping a backup.
                 if (upgraded || lines[0] != TrafficCapture.CsvHeaderLine)
                 {
-                    string backup = CopyAside("captures-backup-");
+                    string backup = CopyAside(FilePath, "captures-backup-");
                     RewriteFile();
                     Logger.Info($"Upgraded the statistics file to the current format. Backup: {backup}");
                 }
@@ -423,6 +556,23 @@ namespace LiveTrafficRouting
             catch (Exception e)
             {
                 Logger.Warn($"Could not read traffic captures: {e.Message}");
+            }
+            try
+            {
+                if (!File.Exists(HotspotPath)) return;
+                string[] lines = File.ReadAllLines(HotspotPath, Encoding.UTF8);
+                if (lines.Length == 0) return;
+                List<string> header = TrafficCapture.SplitCsv(lines[0]);
+                for (int i = 1; i < lines.Length; i++)
+                {
+                    HotspotRow r = HotspotRow.FromCsv(lines[i], header);
+                    if (r != null) s_Hotspots.Add(r);
+                }
+                if (s_Hotspots.Count > kMaxHotspotRows) TrimHotspots();
+            }
+            catch (Exception e)
+            {
+                Logger.Warn($"Could not read traffic hotspots: {e.Message}");
             }
         }
 
@@ -482,11 +632,39 @@ namespace LiveTrafficRouting
             Logger.Info($"Statistics file trimmed: {drop} oldest game hours moved to {archive}");
         }
 
-        private static string CopyAside(string prefix)
+        private static void RewriteHotspots()
         {
-            if (!File.Exists(FilePath)) return "(no file)";
+            Directory.CreateDirectory(Directory_);
+            string tmp = HotspotPath + ".tmp";
+            using (var w = new StreamWriter(tmp, append: false, Encoding.UTF8))
+            {
+                w.WriteLine(HotspotRow.Header);
+                foreach (HotspotRow r in s_Hotspots) w.WriteLine(r.ToCsv());
+            }
+            if (File.Exists(HotspotPath)) File.Delete(HotspotPath);
+            File.Move(tmp, HotspotPath);
+        }
+
+        private static void TrimHotspots()
+        {
+            int drop = s_Hotspots.Count - kKeepHotspotRows;
+            if (drop <= 0) return;
+            string archive = Path.Combine(Directory_, "hotspots-archive-" + Stamp() + ".csv");
+            using (var w = new StreamWriter(archive, append: false, Encoding.UTF8))
+            {
+                w.WriteLine(HotspotRow.Header);
+                for (int i = 0; i < drop; i++) w.WriteLine(s_Hotspots[i].ToCsv());
+            }
+            s_Hotspots.RemoveRange(0, drop);
+            RewriteHotspots();
+            Prune("hotspots-archive-");
+        }
+
+        private static string CopyAside(string file, string prefix)
+        {
+            if (!File.Exists(file)) return "(no file)";
             string path = Path.Combine(Directory_, prefix + Stamp() + ".csv");
-            File.Copy(FilePath, path, overwrite: true);
+            File.Copy(file, path, overwrite: true);
             Prune(prefix);
             return path;
         }

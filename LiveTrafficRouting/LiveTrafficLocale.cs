@@ -79,6 +79,12 @@ namespace LiveTrafficRouting
                     "While on, the mod records one row of statistics per game hour (also with the mod off) to " +
                     "ModsData/LiveTrafficRouting/captures.csv. Off: nothing is recorded, and the mod just does its job." },
 
+                { s.GetOptionLabelLocaleID(nameof(LiveTrafficSettings.KeepRunningOnPopups)), "Don't pause for milestone popups while recording" },
+                { s.GetOptionDescLocaleID(nameof(LiveTrafficSettings.KeepRunningOnPopups)),
+                    "Milestone (city upgrade) and signature building popups pause the game, which stops a test run. " +
+                    "While the statistics panel is on, this turns off the game's blocking popups so the city keeps running; " +
+                    "you still get the unlocks. Your own setting is put back when you turn this or the statistics panel off." },
+
                 { s.GetOptionLabelLocaleID(nameof(LiveTrafficSettings.LogStatistics)), "Write traffic report to log" },
                 { s.GetOptionDescLocaleID(nameof(LiveTrafficSettings.LogStatistics)),
                     "Every game hour, also write the statistics (needs the statistics panel on) to Logs/LiveTrafficRouting.log. " +

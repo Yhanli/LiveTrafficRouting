@@ -48,6 +48,9 @@ If you were on a preset whose values changed in an update (Eager), the new value
 
 **For traffic geeks** (both off by default):
 - **Statistics panel**: shows the Live Traffic icon and panel and records statistics (below). Off = nothing is recorded.
+- **Don't pause for milestone popups while recording** (on by default, shown with the panel on): milestone and
+  signature building popups pause the game and would stop a test run. This turns off the game's own "blocking
+  popups" setting while statistics record, and puts your setting back when you turn it (or the panel) off.
 - **Write traffic report to log**: also writes each recorded game hour to `Logs/LiveTrafficRouting.log`.
 
 ## Statistics (with the mod on and off)
@@ -81,8 +84,12 @@ Where to see them:
   - **Now**: the current hour.
   - **Compare**: pick run **A** and run **B** (default: latest Native vs latest Live) and compare by **same game
     time** (hour by hour, for the same save played twice), **same times of day**, or **all hours**, with a
-    difference column.
+    difference column and a **Real?** check: is the difference bigger than the simulation's own randomness
+    (clear / likely / noise, from a paired or Welch t-test that also corrects for neighbouring hours being related).
+    Hover it for the 95% range.
   - **History**: both runs side by side, **by time of day** or as a **timeline**, for any metric.
+  - **Hotspots**: the streets and junctions with the most vehicles waiting in queues (and jam warnings), run A vs
+    run B. Recorded per game hour (top 15 places) to `hotspots.csv`.
   - **Re-routing**: re-routes, % that found a faster route, time saved, trucks and held-back re-routes, by time of
     day or as a timeline.
   - **Runs**: all runs with their settings; delete one run, **all Live runs (keeping the Native baseline)**, or

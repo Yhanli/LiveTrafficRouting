@@ -15,7 +15,7 @@ $mixed: #b0a060;
     position: absolute;
     top: 52rem;
     left: 0;
-    width: 540rem;
+    width: 600rem;
     max-height: 80vh;
 }
 
@@ -345,3 +345,25 @@ $runB: #5ecf8a;
 .runText { flex: 1; display: flex; flex-direction: column; }
 .runTitle { display: flex; flex-direction: row; align-items: center; font-size: 12rem; }
 .runSettings { font-size: 10rem; color: rgba(255, 255, 255, 0.55); margin-top: 2rem; }
+
+// ---- Significance ----
+.tableHeadSig, .tableCellSig { width: 56rem; text-align: right; }
+.tableHeadSig { font-weight: bold; color: rgba(255, 255, 255, 0.85); }
+.sig_clear, .sig_likely, .sig_noise {
+    padding: 0 5rem;
+    border-radius: 3rem;
+    font-size: 10rem;
+}
+.sig_clear { background-color: rgba(94, 207, 138, 0.35); color: white; }
+.sig_likely { background-color: rgba(222, 190, 90, 0.35); color: white; }
+.sig_noise { background-color: rgba(255, 255, 255, 0.10); color: rgba(255, 255, 255, 0.6); }
+
+// ---- Hotspots ----
+.placeKind {
+    margin-right: 4rem;
+    padding: 0 4rem;
+    border-radius: 3rem;
+    font-size: 9rem;
+    background-color: rgba(255, 255, 255, 0.12);
+    color: rgba(255, 255, 255, 0.7);
+}

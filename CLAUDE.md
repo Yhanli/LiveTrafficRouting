@@ -19,6 +19,11 @@ Cities: Skylines II **code mod** (C#, Unity ECS). Goal: congestion-aware routing
   the partial hour is dropped), saved to `ModsData/LiveTrafficRouting/captures.csv`. The CSV is read by header name
   (add columns in `TrafficCapture.Columns`; old files upgrade once with a backup). Size cap 20k rows -> archive.
   All comparisons are computed in the panel (TypeScript) from the `history` and `runs` bindings.
+- Hotspots: the sampling jobs map each queued vehicle / jam warning lane to a place (`Owner` -> `Aggregated.m_Aggregate`
+  street, or the node for junction lanes); names via `NameSystem.GetRenderedLabelName`. Top 15 per hour go to
+  `hotspots.csv` (keyed by place name). Deleting runs deletes their hotspot rows too.
+- `PopupGuard` turns off `SharedSettings.instance.userInterface.blockingPopupsEnabled` while recording (option
+  `KeepRunningOnPopups`) and restores the player's value when the option/panel goes off or the mod unloads.
 - Preset values may change between versions: `ReapplyPickedPreset()` after loading keeps users on their preset.
 
 ## Decompiled game code

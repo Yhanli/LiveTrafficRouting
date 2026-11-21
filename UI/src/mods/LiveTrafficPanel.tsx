@@ -11,6 +11,7 @@ const enabled$ = bindValue<boolean>(GROUP, "enabled", false);
 const current$ = bindValue<string>(GROUP, "current", "{}");
 const history$ = bindValue<string>(GROUP, "history", "[]");
 const runs$ = bindValue<string>(GROUP, "runs", "[]");
+const hotspots$ = bindValue<string>(GROUP, "hotspots", "{}");
 
 const ICON = "Media/Game/Icons/Traffic.svg";
 
@@ -24,6 +25,7 @@ interface Capture {
     rr: number; rrCars: number; rrTrucks: number; rrTaxis: number; rrBetter: number; rrNoBetter: number;
     rrSaved: number; rrHeld: number; planSpeed: number; planJammed: number; ms: number;
 }
+interface Hotspot { p: string; k: string; q: number; j: number; h: number; }
 interface Run { id: string; mode: string; preset: string; settings: string; first: string; last: string; hours: number; }
 
 /** Averages over a set of game hours. */
@@ -170,6 +172,100 @@ function compare(a: Capture[], b: Capture[], scope: Scope): { a: Avg; b: Avg; no
 }
 
 // ---------------------------------------------------------------------------------------------
+// Significance: is the difference between A and B bigger than the simulation's own randomness?
+// ---------------------------------------------------------------------------------------------
+type Verdict = "clear" | "likely" | "noise" | "n/a";
+interface Significance { verdict: Verdict; t: number; range: number; n: number; nEff: number; paired: boolean; }
+
+function meanSd(xs: number[]): { mean: number; sd: number } {
+    const n = xs.length;
+    const mean = xs.reduce((a, b) => a + b, 0) / Math.max(1, n);
+    const v = n > 1 ? xs.reduce((a, x) => a + (x - mean) * (x - mean), 0) / (n - 1) : 0;
+    return { mean, sd: Math.sqrt(v) };
+}
+
+/**
+ * Effective sample size for a series of consecutive game hours: neighbouring hours are related (a jam at 08:00 is
+ * still there at 09:00), so they count as fewer independent observations. Uses the lag-1 autocorrelation.
+ */
+function effectiveN(xs: number[]): number {
+    const n = xs.length;
+    if (n < 4) return n;
+    const { mean } = meanSd(xs);
+    let num = 0;
+    let den = 0;
+    for (let i = 0; i < n; i++) {
+        den += (xs[i] - mean) * (xs[i] - mean);
+        if (i > 0) num += (xs[i] - mean) * (xs[i - 1] - mean);
+    }
+    const r = den > 0 ? Math.max(0, Math.min(0.95, num / den)) : 0;
+    return Math.max(2, Math.min(n, (n * (1 - r)) / (1 + r)));
+}
+
+function verdictOf(t: number, nEff: number): Verdict {
+    if (nEff < 3) return "n/a";
+    const at = Math.abs(t);
+    return at >= 3 ? "clear" : at >= 2 ? "likely" : "noise";
+}
+
+/** Values of one metric for runs A and B, in the same way the comparison scope pairs them. */
+function seriesFor(a: Capture[], b: Capture[], scope: Scope, m: Metric): { xs: number[]; ys: number[]; paired: boolean; consecutive: boolean } {
+    const xs: number[] = [];
+    const ys: number[] = [];
+    if (scope === "Paired") {
+        const ma = byTime(a);
+        const mb = byTime(b);
+        Array.from(ma.keys()).sort().forEach(t => {
+            const ca = ma.get(t)!;
+            const cb = mb.get(t);
+            if (!cb) return;
+            const va = m.value(ca);
+            const vb = m.value(cb);
+            if (va !== null && vb !== null) { xs.push(va); ys.push(vb); }
+        });
+        return { xs, ys, paired: true, consecutive: true };
+    }
+    if (scope === "SameHours") {
+        const ha = byHourOfDay(a);
+        const hb = byHourOfDay(b);
+        for (let h = 0; h < 24; h++) {
+            const va = ha[h] ? m.value(ha[h]!) : null;
+            const vb = hb[h] ? m.value(hb[h]!) : null;
+            if (va !== null && vb !== null) { xs.push(va); ys.push(vb); }
+        }
+        return { xs, ys, paired: true, consecutive: false };
+    }
+    for (const c of a) { const v = m.value(c); if (v !== null) xs.push(v); }
+    for (const c of b) { const v = m.value(c); if (v !== null) ys.push(v); }
+    return { xs, ys, paired: false, consecutive: true };
+}
+
+/** Paired t-test on the differences, or Welch's t-test for two independent series. */
+function significance(a: Capture[], b: Capture[], scope: Scope, m: Metric): Significance {
+    const { xs, ys, paired, consecutive } = seriesFor(a, b, scope, m);
+    if (paired) {
+        const d = xs.map((x, i) => ys[i] - x);
+        const n = d.length;
+        const nEff = consecutive ? effectiveN(d) : n;
+        const { mean, sd } = meanSd(d);
+        const se = sd / Math.sqrt(Math.max(1, nEff));
+        const t = se > 0 ? mean / se : mean === 0 ? 0 : 99;
+        return { verdict: n < 3 ? "n/a" : verdictOf(t, nEff), t, range: 2 * se, n, nEff, paired };
+    }
+    const A = meanSd(xs);
+    const B = meanSd(ys);
+    const na = consecutive ? effectiveN(xs) : xs.length;
+    const nb = consecutive ? effectiveN(ys) : ys.length;
+    const se = Math.sqrt((A.sd * A.sd) / Math.max(1, na) + (B.sd * B.sd) / Math.max(1, nb));
+    const diff = B.mean - A.mean;
+    const t = se > 0 ? diff / se : diff === 0 ? 0 : 99;
+    const nEff = Math.min(na, nb);
+    return { verdict: xs.length < 3 || ys.length < 3 ? "n/a" : verdictOf(t, nEff), t, range: 2 * se, n: Math.min(xs.length, ys.length), nEff, paired };
+}
+
+const VERDICT_TEXT: Record<Verdict, string> = { clear: "clear", likely: "likely", noise: "noise", "n/a": "" };
+
+// ---------------------------------------------------------------------------------------------
 // Small components
 // ---------------------------------------------------------------------------------------------
 const InfoRow = ({ label, value, hint }: { label: string; value: string; hint?: string }) => {
@@ -267,7 +363,7 @@ function modeLabel(mode?: string, preset?: string): string {
 // ---------------------------------------------------------------------------------------------
 // Panel
 // ---------------------------------------------------------------------------------------------
-type Tab = "Now" | "Compare" | "History" | "Rerouting" | "Runs";
+type Tab = "Now" | "Compare" | "History" | "Hotspots" | "Rerouting" | "Runs";
 type View = "Timeline" | "TimeOfDay";
 const MAX_SLOTS = 48;
 
@@ -288,6 +384,8 @@ export const LiveTrafficPanel = () => {
     const current = parse<Current>(useValue(current$), {});
     const historyJson = useValue(history$);
     const runsJson = useValue(runs$);
+    const hotspotsJson = useValue(hotspots$);
+    const hotspots = useMemo(() => parse<Record<string, Hotspot[]>>(hotspotsJson, {}), [hotspotsJson]);
     const history = useMemo(() => parse<Capture[]>(historyJson, []), [historyJson]);
     const runs = useMemo(() => parse<Run[]>(runsJson, []), [runsJson]);
 
@@ -397,7 +495,7 @@ export const LiveTrafficPanel = () => {
                 <Panel header="Live Traffic" className={styles.panel} onClose={() => setExpanded(false)}>
                     <div className={styles.body}>
                         <div className={styles.tabs}>
-                            {(["Now", "Compare", "History", "Rerouting", "Runs"] as Tab[]).map(t => (
+                            {(["Now", "Compare", "History", "Hotspots", "Rerouting", "Runs"] as Tab[]).map(t => (
                                 <div key={t} className={tab === t ? `${styles.tab} ${styles.tabOn}` : styles.tab} onClick={() => switchTab(t)}>
                                     {t === "Rerouting" ? "Re-routing" : t}
                                 </div>
@@ -441,27 +539,46 @@ export const LiveTrafficPanel = () => {
                                         <div className={`${styles.tableHead} ${styles.colorA}`}>{nameA}</div>
                                         <div className={`${styles.tableHead} ${styles.colorB}`}>{nameB}</div>
                                         <div className={styles.tableHeadWide}>B vs A</div>
+                                        <div className={styles.tableHeadSig}>Real?</div>
                                     </div>
                                     <div className={styles.tableRow}>
                                         <div className={styles.tableLabel}>Game hours</div>
                                         <div className={styles.tableCell}>{fmt(cmp.a.hours)}</div>
                                         <div className={styles.tableCell}>{fmt(cmp.b.hours)}</div>
                                         <div className={styles.tableCellWide}></div>
+                                        <div className={styles.tableCellSig}></div>
                                     </div>
                                     {compareRows.map(([label, m]) => {
                                         const va = cmp.a.hours > 0 ? m.value(cmp.a) : null;
                                         const vb = cmp.b.hours > 0 ? m.value(cmp.b) : null;
                                         const d = fmtDiff(va, vb, m);
+                                        const sig = significance(capsA, capsB, scope, m);
+                                        const sigTip = (
+                                            <div className={styles.tip}>
+                                                <div className={styles.tipTitle}>{label}: {d.text} {sig.verdict !== "n/a" ? `(${VERDICT_TEXT[sig.verdict]})` : ""}</div>
+                                                {sig.verdict === "n/a" ? <div>Not enough game hours to tell yet.</div> : (<>
+                                                    <div>95% range of the difference: {d.text !== "-" ? `${fmt((vb ?? 0) - (va ?? 0) - sig.range, m.digits)} to ${fmt((vb ?? 0) - (va ?? 0) + sig.range, m.digits)}${m.unit}` : "-"}</div>
+                                                    <div>Based on {sig.n} {sig.paired ? "paired " : ""}hours{sig.nEff < sig.n - 0.5 ? `, counted as about ${sig.nEff.toFixed(0)} independent ones (neighbouring hours are related)` : ""}. t = {Math.abs(sig.t) >= 99 ? "very large" : sig.t.toFixed(1)}.</div>
+                                                    <div>Clear: |t| 3 or more, very unlikely to be chance. Likely: |t| 2 to 3. Noise: smaller than the simulation's own randomness.</div>
+                                                </>)}
+                                            </div>
+                                        );
                                         return (
                                             <div className={styles.tableRow} key={label}>
                                                 <div className={styles.tableLabel}>{label}</div>
                                                 <div className={styles.tableCell}>{fmt(va, m.digits, m.unit)}</div>
                                                 <div className={styles.tableCell}>{fmt(vb, m.digits, m.unit)}</div>
-                                                <div className={`${styles.tableCellWide} ${d.cls}`}>{d.text}</div>
+                                                <div className={`${styles.tableCellWide} ${sig.verdict === "noise" ? "" : d.cls}`}>{d.text}</div>
+                                                <Tooltip tooltip={sigTip}>
+                                                    <div className={styles.tableCellSig}>
+                                                        {sig.verdict !== "n/a" && <span className={styles[`sig_${sig.verdict}`]}>{VERDICT_TEXT[sig.verdict]}</span>}
+                                                    </div>
+                                                </Tooltip>
                                             </div>
                                         );
                                     })}
                                 </div>
+                                <div className={styles.note}>Real?: is the difference bigger than the simulation's own randomness? Hover it for the details. Differences marked noise are not coloured.</div>
                                 <div className={styles.note}>A: {runA?.settings}<br />B: {runB?.settings}</div>
                             </>)}
                         </>)}
@@ -480,6 +597,52 @@ export const LiveTrafficPanel = () => {
                                        slots={view === "Timeline" ? timelineSlots(metric, capsA, capsB) : hourSlots(metric, capsA, capsB)}
                                        idle={view === "Timeline" ? "Game hours of both runs side by side. Hover a bar for details." : "Average per hour of the day. Hover an hour to compare."} />
                                 {legend}
+                            </>)}
+                        </>)}
+
+                        {tab === "Hotspots" && (<>
+                            {runs.length === 0 ? <div className={styles.empty}>No game hours recorded yet.</div> : (<>
+                                {pickers}
+                                {(() => {
+                                    const ha = (runA && hotspots[runA.id]) || [];
+                                    const hb = (runB && hotspots[runB.id]) || [];
+                                    const places = new Map<string, { k: string; a?: Hotspot; b?: Hotspot }>();
+                                    for (const x of ha) places.set(x.p, { k: x.k, a: x });
+                                    for (const x of hb) { const e = places.get(x.p); if (e) e.b = x; else places.set(x.p, { k: x.k, b: x }); }
+                                    const list = Array.from(places.entries())
+                                        .sort((x, y) => Math.max(y[1].a?.q ?? 0, y[1].b?.q ?? 0) - Math.max(x[1].a?.q ?? 0, x[1].b?.q ?? 0))
+                                        .slice(0, 14);
+                                    const qm: Metric = { key: "q", label: "Queued", unit: "", digits: 1, higherIsBetter: false, value: () => 0 };
+                                    if (list.length === 0) return <div className={styles.empty}>No queues recorded for these runs yet (hotspots are recorded from this version on).</div>;
+                                    return (<>
+                                        <div className={styles.note}>Streets and junctions with the most vehicles waiting in queues, on average per game hour of each run. Jam warnings in brackets.</div>
+                                        <div className={styles.table}>
+                                            <div className={styles.tableRow}>
+                                                <div className={styles.tableLabel}>Place</div>
+                                                <div className={`${styles.tableHead} ${styles.colorA}`}>{nameA}</div>
+                                                <div className={`${styles.tableHead} ${styles.colorB}`}>{nameB}</div>
+                                                <div className={styles.tableHeadWide}>B vs A</div>
+                                            </div>
+                                            {list.map(([place, e]) => {
+                                                const va = e.a ? e.a.q : 0;
+                                                const vb = e.b ? e.b.q : 0;
+                                                const d = fmtDiff(va, vb, qm);
+                                                const jam = (x?: Hotspot) => (x && x.j >= 0.05 ? ` (${fmt(x.j, 1)})` : "");
+                                                return (
+                                                    <div className={styles.tableRow} key={place}>
+                                                        <div className={styles.tableLabel}>
+                                                            <span className={styles.placeKind}>{e.k === "junction" ? "J" : "S"}</span> {place}
+                                                        </div>
+                                                        <div className={styles.tableCell}>{fmt(va, 1)}{jam(e.a)}</div>
+                                                        <div className={styles.tableCell}>{fmt(vb, 1)}{jam(e.b)}</div>
+                                                        <div className={`${styles.tableCellWide} ${d.cls}`}>{d.text}</div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                        <div className={styles.note}>S = street, J = junction. A place that wasn't among the busiest in an hour counts as 0 for that hour. Streets with the same name are counted together.</div>
+                                    </>);
+                                })()}
                             </>)}
                         </>)}
 

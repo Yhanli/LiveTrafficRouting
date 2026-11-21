@@ -34,6 +34,7 @@ namespace LiveTrafficRouting
 
         public void OnDispose()
         {
+            PopupGuard.Restore();
             Settings?.UnregisterInOptionsUI();
             Settings = null;
             Logger.Info("Live Traffic Routing disposed.");
