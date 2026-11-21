@@ -262,15 +262,23 @@ namespace LiveTrafficRouting
                     m_Seen[creature] = new SeenTrip { m_Target = destination, m_Frame = m_Frame };
                     if (counted) continue;
 
+                    // The way back keeps the shopping/leisure purpose but heads home: not a destination choice.
+                    Entity home = Entity.Null;
+                    if (m_HouseholdMemberData.TryGetComponent(citizen, out HouseholdMember member) &&
+                        m_PropertyRenterData.TryGetComponent(member.m_Household, out PropertyRenter renter))
+                    {
+                        home = renter.m_Property;
+                    }
+                    if (home != Entity.Null && destination == home) continue;
+
                     int slot = group == 2 ? kShop : kLeisure;
                     NativeParallelHashMap<Entity, int> places = group == 2 ? m_ShopPlaces : m_LeisurePlaces;
                     m_Stats[slot] += 1;
                     places.TryGetValue(destination, out int n);
                     places[destination] = n + 1;
 
-                    if (m_HouseholdMemberData.TryGetComponent(citizen, out HouseholdMember member) &&
-                        m_PropertyRenterData.TryGetComponent(member.m_Household, out PropertyRenter home) &&
-                        m_TransformData.TryGetComponent(home.m_Property, out Transform homeTransform) &&
+                    if (home != Entity.Null &&
+                        m_TransformData.TryGetComponent(home, out Transform homeTransform) &&
                         m_TransformData.TryGetComponent(destination, out Transform destTransform))
                     {
                         m_Stats[slot + 1] += math.distance(homeTransform.m_Position.xz, destTransform.m_Position.xz);
