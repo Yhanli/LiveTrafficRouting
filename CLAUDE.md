@@ -1,0 +1,38 @@
+# Live Traffic Routing: notes for Claude
+
+Cities: Skylines II **code mod** (C#, Unity ECS). Goal: congestion-aware routing based on live traffic
+("navigation app" behaviour). Don't use "Google" or "Google Maps" in the mod name or description (trademark).
+
+## Layout
+
+- `LiveTrafficRouting/` is the mod project (net48, imports the toolchain's `Mod.props`/`Mod.targets` via `%CSII_TOOLPATH%`).
+  Same structure and conventions as the sibling `..\MouseLight` (Better Cursor Light) project.
+- `docs/research.md` holds the findings about vanilla pathfinding and traffic flow, plus the implementation plan. Read it first.
+- `tools/build.ps1` builds and deploys. It refuses to run while `Cities2` is running.
+- `UI/` is the in-game statistics panel: a UI module (React + TypeScript, from the game's own template in
+  `Cities2_Data/Content/Game/.ModdingToolchain/npx-create-csii-ui-mod`). `npm run build` writes `UI/build`
+  (webpack output changed from the Mods folder to `build`), and the csproj target `DeployUIModule` copies it into
+  the mod folder after the toolchain's deploy (which deletes the folder first). `build.ps1` runs both.
+  C# side: `TrafficUISystem` (bindings group `liveTrafficRouting`: `current`, `history`, `averages`, JSON strings).
+- Statistics: `TrafficReportSystem` samples every 1024 frames and records one `TrafficCapture` per game hour
+  (also when the mod is Off: mode "Native"), saved to `ModsData/LiveTrafficRouting/captures.csv`.
+  Options shows the same numbers via getter-only string properties marked `[Colossal.Json.Exclude]`.
+
+## Decompiled game code
+
+- `..\_decompiled\Game-1.6.4f1\` is Game.dll decompiled with `ilspycmd` (installed as a dotnet global tool, v9.1, which works with the .NET 8 SDK).
+  Reference only: **never copy large chunks into this repo, never commit or publish it.**
+- After a game update, decompile again into a new versioned folder and diff `TrafficFlowSystem`, `PathUtils`, `CarNavigationSystem` and `PathfindQueueSystem`.
+
+## Build and test
+
+- **Never run `dotnet build` directly while the game is running**, not even "just to compile": `Mod.targets` deletes the
+  deployed Mods folder first and fails on the locked DLL, which leaves the installed mod broken for the next game start.
+  To only check that it compiles while the game is open, redirect the deploy to a scratch folder:
+  `dotnet build LiveTrafficRouting\LiveTrafficRouting.csproj -c Release -p:LocalModsPath=<scratch dir>`
+  (`DeployDir` is `$(LocalModsPath)\$(TargetName)`, and a command-line property can't be overridden by the targets).
+  Deploy for real with `tools\build.ps1` once the game is closed.
+- Source files use CRLF line endings; scripted find/replace must account for `\r\n`.
+- `dotnet` is not on PATH; use `C:\Program Files\dotnet\dotnet.exe` (the build script does).
+- No automated tests. Verification happens in game: logs at `...\Cities Skylines II\Logs\LiveTrafficRouting.log`.
+- Only publish when the user asks.
