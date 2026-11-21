@@ -342,6 +342,8 @@ namespace LiveTrafficRouting
             LiveTrafficSettings settings = Mod.Settings;
             TrafficReportStore.CurrentCity = m_CityConfigurationSystem.cityName ?? "";
             PopupGuard.Update(settings);
+            if (settings != null) TrafficReportStore.KeepHours = settings.KeepHours();
+            TrafficReportStore.CurrentRunId = m_RunId ?? "";
 
             // Statistics are for traffic geeks: when the panel is off, record nothing at all.
             if (settings != null && !settings.ShowStatistics)

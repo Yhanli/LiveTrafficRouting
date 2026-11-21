@@ -85,6 +85,24 @@ namespace LiveTrafficRouting
                     "While the statistics panel is on, this turns off the game's blocking popups so the city keeps running; " +
                     "you still get the unlocks. Your own setting is put back when you turn this or the statistics panel off." },
 
+                { s.GetOptionLabelLocaleID(nameof(LiveTrafficSettings.KeepStatisticsFor)), "Keep statistics for" },
+                { s.GetOptionDescLocaleID(nameof(LiveTrafficSettings.KeepStatisticsFor)),
+                    "How much game time of statistics to keep, for all cities together. A game day takes roughly 10 to 60 minutes " +
+                    "of real play, depending on game speed. Above the limit, the oldest whole runs move to archive files in " +
+                    "ModsData/LiveTrafficRouting (a run is never cut in half). The newest Native run of each city (your baseline), " +
+                    "runs you pinned in the panel and the run being recorded are always kept.\n\n" +
+                    "Warning for 10 years and Unlimited: the files grow to about 100 MB per 10 game years (Unlimited: without end). " +
+                    "They are read when the game starts, which can add several seconds to loading and use more memory. " +
+                    "Check the size of ModsData/LiveTrafficRouting now and then." },
+                { s.GetEnumValueLocaleID(KeepStatistics.OneMonth), "1 game month (30 days, about 1 MB)" },
+                { s.GetEnumValueLocaleID(KeepStatistics.ThreeMonths), "3 game months (90 days, about 3 MB)" },
+                { s.GetEnumValueLocaleID(KeepStatistics.OneYear), "1 game year (365 days, about 11 MB)" },
+                { s.GetEnumValueLocaleID(KeepStatistics.ThreeYears), "3 game years (1,095 days, about 33 MB)" },
+                { s.GetEnumValueLocaleID(KeepStatistics.TenYears), "10 game years (3,650 days, about 105 MB) - large" },
+                { s.GetEnumValueLocaleID(KeepStatistics.Unlimited), "Unlimited (never cleaned up) - grows without limit" },
+                { s.GetOptionWarningLocaleID(nameof(LiveTrafficSettings.KeepStatisticsFor)),
+                    "Large statistics files can slow down loading the game. See the description." },
+
                 { s.GetOptionLabelLocaleID(nameof(LiveTrafficSettings.LogStatistics)), "Write traffic report to log" },
                 { s.GetOptionDescLocaleID(nameof(LiveTrafficSettings.LogStatistics)),
                     "Every game hour, also write the statistics (needs the statistics panel on) to Logs/LiveTrafficRouting.log. " +

@@ -14,6 +14,7 @@ namespace LiveTrafficRouting
         internal const string Group = "liveTrafficRouting";
 
         private int m_Version = -1;
+        private int m_DataVersion = -1;
         private string m_CurrentJson = "{}";
         private string m_HistoryJson = "[]";
         private string m_RunsJson = "[]";
@@ -30,6 +31,7 @@ namespace LiveTrafficRouting
             AddBinding(new TriggerBinding(Group, "deleteAll", StatisticsReset.DeleteAll));
             AddBinding(new TriggerBinding(Group, "deleteLive", StatisticsReset.DeleteLive));
             AddBinding(new TriggerBinding<string>(Group, "deleteRun", StatisticsReset.DeleteRun));
+            AddBinding(new TriggerBinding<string>(Group, "togglePin", TrafficReportStore.TogglePin));
             Logger.Info("TrafficUISystem created.");
         }
 
@@ -38,6 +40,9 @@ namespace LiveTrafficRouting
             if (m_Version == TrafficReportStore.Version) return;
             m_Version = TrafficReportStore.Version;
             m_CurrentJson = TrafficReportStore.Current.ToJson();
+            // The heavy parts only when recorded data changed, not on every "right now" update.
+            if (m_DataVersion == TrafficReportStore.DataVersion) return;
+            m_DataVersion = TrafficReportStore.DataVersion;
             m_HistoryJson = TrafficReportStore.HistoryJson();
             m_RunsJson = TrafficReportStore.RunsJson();
             m_HotspotsJson = TrafficReportStore.HotspotsJson(25);

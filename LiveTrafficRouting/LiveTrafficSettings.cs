@@ -19,6 +19,17 @@ namespace LiveTrafficRouting
     /// Picking a preset fills in the sliders. Changing a slider by hand switches the preset to Custom
     /// (unless the values happen to match the preset). The sliders are only greyed out when the mod is Off.
     /// </summary>
+    /// <summary>How long to keep statistics (all cities together).</summary>
+    public enum KeepStatistics
+    {
+        OneMonth,
+        ThreeMonths,
+        OneYear,
+        ThreeYears,
+        TenYears,
+        Unlimited,
+    }
+
     [FileLocation(nameof(LiveTrafficRouting))]
     [SettingsUIGroupOrder(TrafficGroup, DebugGroup)]
     [SettingsUIShowGroupName(DebugGroup)]
@@ -60,6 +71,7 @@ namespace LiveTrafficRouting
         private bool m_LogStatistics;
         private bool m_ShowStatistics;
         private bool m_KeepRunningOnPopups;
+        private KeepStatistics m_KeepStatisticsFor;
         // The last preset picked in the dropdown, also while loading. Used to re-apply a preset whose values
         // changed in a mod update (otherwise the old saved slider values would turn it into "Custom").
         private TrafficAwareness m_PickedAwareness;
@@ -169,6 +181,37 @@ namespace LiveTrafficRouting
 
         public bool IsStatisticsOff() => !m_ShowStatistics;
 
+        [SettingsUISection(GeneralSection, DebugGroup)]
+        [SettingsUIHideByCondition(typeof(LiveTrafficSettings), nameof(IsStatisticsOff))]
+        [SettingsUIWarning(typeof(LiveTrafficSettings), nameof(IsKeepingVeryLong))]
+        public KeepStatistics KeepStatisticsFor
+        {
+            get => m_KeepStatisticsFor;
+            set
+            {
+                if (m_KeepStatisticsFor == value) return;
+                m_KeepStatisticsFor = value;
+                Save();
+            }
+        }
+
+        /// <summary>Shows the warning icon: the files can get large and slow down loading.</summary>
+        public bool IsKeepingVeryLong() => m_KeepStatisticsFor == KeepStatistics.TenYears || m_KeepStatisticsFor == KeepStatistics.Unlimited;
+
+        /// <summary>Game hours to keep (one row per game hour).</summary>
+        internal int KeepHours()
+        {
+            switch (m_KeepStatisticsFor)
+            {
+                case KeepStatistics.OneMonth: return 30 * 24;
+                case KeepStatistics.ThreeMonths: return 90 * 24;
+                case KeepStatistics.ThreeYears: return 3 * 365 * 24;
+                case KeepStatistics.TenYears: return 10 * 365 * 24;
+                case KeepStatistics.Unlimited: return int.MaxValue;
+                default: return 365 * 24;
+            }
+        }
+
 
         [SettingsUISection(GeneralSection, DebugGroup)]
         public bool LogStatistics
@@ -244,6 +287,7 @@ namespace LiveTrafficRouting
             m_LogStatistics = false;
             m_ShowStatistics = false;
             m_KeepRunningOnPopups = true;
+            m_KeepStatisticsFor = KeepStatistics.OneYear;
             m_PickedAwareness = TrafficAwareness.Balanced;
             m_IsLoadingDefaults = false;
         }

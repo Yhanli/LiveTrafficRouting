@@ -51,6 +51,10 @@ If you were on a preset whose values changed in an update (Eager), the new value
 - **Don't pause for milestone popups while recording** (on by default, shown with the panel on): milestone and
   signature building popups pause the game and would stop a test run. This turns off the game's own "blocking
   popups" setting while statistics record, and puts your setting back when you turn it (or the panel) off.
+- **Keep statistics for**: 1 game month, 3 months, **1 year** (default, about 11 MB), 3 years, 10 years (about 105 MB)
+  or Unlimited. The last two show a warning: large files slow down loading. Above the limit the oldest *whole* runs
+  move to archive files; the newest Native run of each city (baseline), runs marked **Keep** in the panel's Runs tab
+  and the run being recorded are never removed. One limit for all cities and both files together.
 - **Write traffic report to log**: also writes each recorded game hour to `Logs/LiveTrafficRouting.log`.
 
 ## Statistics (with the mod on and off)
@@ -76,8 +80,8 @@ tagged with its **run**, to
 run starts when you load a save, delete statistics, or change the mod's settings; the game hour in progress is then
 not recorded, so every row belongs to exactly one setup.
 
-The file is read by column name (older files are upgraded once, with a backup). Above 20,000 rows the oldest move to
-`captures-archive-<date>.csv`; deleting keeps a `captures-backup-<date>.csv`. Only the newest 5 of each are kept.
+The files are read by column name (older files are upgraded once, with a backup). Cleanup follows "Keep statistics
+for" (whole runs to `*-archive-<date>.csv`); deleting keeps a `*-backup-<date>.csv`. Only the newest 5 of each are kept.
 
 Where to see them:
 - **In game:** the traffic icon in the top-left opens the **Live Traffic** panel (close it to collapse to the icon):

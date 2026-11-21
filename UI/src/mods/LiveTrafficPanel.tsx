@@ -26,7 +26,7 @@ interface Capture {
     rrSaved: number; rrHeld: number; planSpeed: number; planJammed: number; ms: number;
 }
 interface Hotspot { p: string; k: string; q: number; j: number; h: number; }
-interface Run { id: string; mode: string; preset: string; settings: string; first: string; last: string; hours: number; }
+interface Run { id: string; mode: string; preset: string; settings: string; first: string; last: string; hours: number; pinned?: number; baseline?: number; }
 
 /** Averages over a set of game hours. */
 interface Avg {
@@ -673,6 +673,7 @@ export const LiveTrafficPanel = () => {
                         </>)}
 
                         {tab === "Runs" && (<>
+                            <div className={styles.note}>Old runs are cleaned up after the time set in Options ("Keep statistics for"), oldest first, whole runs only. The baseline and runs marked Keep stay.</div>
                             <div className={styles.note}>A run is one continuous recording with the same mode and settings. A new run starts when you load a save, reset, or change the mod's settings (the hour in progress is then not counted).</div>
                             {runs.length === 0 && <div className={styles.empty}>No runs recorded for this city yet.</div>}
                             <div className={styles.runList}>
@@ -681,10 +682,18 @@ export const LiveTrafficPanel = () => {
                                         <div className={styles.runText}>
                                             <div className={styles.runTitle}>
                                                 <span className={r.mode === "Live" ? styles.badgeLive : styles.badgeNative}>{runName(r, runs)}</span>
+                                                {r.baseline ? <span className={styles.keepBadge}>baseline</span> : null}
                                                 <span className={styles.chipSub}>{runRange(r)}</span>
                                             </div>
                                             <div className={styles.runSettings}>{r.settings}</div>
                                         </div>
+                                        <Tooltip tooltip={<div className={styles.tip}>{r.baseline
+                                            ? "The newest Native run of this city is your baseline and is always kept."
+                                            : r.pinned ? "Pinned: never removed by 'Keep statistics for'. Click to unpin." : "Pin to keep this run when old statistics are cleaned up ('Keep statistics for')."}</div>}>
+                                            <div className={`${styles.toggle} ${r.pinned ? styles.toggleOn : ""}`} onClick={() => trigger(GROUP, "togglePin", r.id)}>
+                                                {r.pinned ? "Kept" : "Keep"}
+                                            </div>
+                                        </Tooltip>
                                         <DangerButton id={"run:" + r.id} label="Delete" confirmLabel="Sure?" pending={pending} setPending={setPending}
                                                       onConfirm={() => trigger(GROUP, "deleteRun", r.id)} />
                                     </div>

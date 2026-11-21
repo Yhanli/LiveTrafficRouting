@@ -285,10 +285,14 @@ namespace LiveTrafficRouting
     /// </summary>
     internal static class TrafficReportStore
     {
-        // Keep the file (and the startup load) small: above kMaxFileRows the oldest rows move to an archive file,
-        // leaving kKeepRows. ~20k rows is ~2.5 years of game time for one city, about 3-4 MB.
-        private const int kMaxFileRows = 20000;
-        private const int kKeepRows = 12000;
+        /// <summary>
+        /// How many game hours of statistics to keep, all cities together ("Keep statistics for"). Above it, the oldest
+        /// whole runs move to archive files. The newest Native run of each city, pinned runs and the run being recorded
+        /// are never moved.
+        /// </summary>
+        public static int KeepHours { get; set; } = 365 * 24;
+        /// <summary>The run being recorded right now (never trimmed).</summary>
+        public static string CurrentRunId { get; set; } = "";
         // How many backup / archive files to keep (oldest deleted first).
         private const int kMaxBackups = 5;
         // Captures of the current city sent to the panel (newest).
@@ -296,19 +300,38 @@ namespace LiveTrafficRouting
 
         private static readonly List<TrafficCapture> s_Captures = new List<TrafficCapture>();
         private static readonly List<HotspotRow> s_Hotspots = new List<HotspotRow>();
-        // Up to 15 rows per game hour, so a larger cap than the captures.
-        private const int kMaxHotspotRows = 150000;
-        private const int kKeepHotspotRows = 90000;
+        private static readonly HashSet<string> s_Pinned = new HashSet<string>();
         private static bool s_Loaded;
 
         public static TrafficSnapshot Current { get; private set; } = new TrafficSnapshot();
-        public static string CurrentCity { get; set; } = "";
+        private static string s_CurrentCity = "";
+        /// <summary>The city being played. Changing it refreshes the panel's data (it only shows this city).</summary>
+        public static string CurrentCity
+        {
+            get => s_CurrentCity;
+            set
+            {
+                value = value ?? "";
+                if (value == s_CurrentCity) return;
+                s_CurrentCity = value;
+                DataChanged();
+            }
+        }
         /// <summary>Changes whenever there is something new for the UI.</summary>
         public static int Version { get; private set; }
+        /// <summary>Changes only when recorded data changes (about once per game hour): history, runs, hotspots, pins.</summary>
+        public static int DataVersion { get; private set; }
+
+        private static void DataChanged()
+        {
+            Version++;
+            DataVersion++;
+        }
 
         public static string Directory_ => Path.Combine(UnityEngine.Application.persistentDataPath, "ModsData", nameof(LiveTrafficRouting));
         public static string FilePath => Path.Combine(Directory_, "captures.csv");
         public static string HotspotPath => Path.Combine(Directory_, "hotspots.csv");
+        public static string PinnedPath => Path.Combine(Directory_, "pinned-runs.txt");
 
         public static TrafficCapture Last => s_Captures.Count > 0 ? s_Captures[s_Captures.Count - 1] : null;
 
@@ -322,7 +345,7 @@ namespace LiveTrafficRouting
         {
             EnsureLoaded();
             s_Captures.Add(capture);
-            Version++;
+            DataChanged();
             try
             {
                 Directory.CreateDirectory(Directory_);
@@ -332,12 +355,12 @@ namespace LiveTrafficRouting
                     if (writeHeader) w.WriteLine(TrafficCapture.CsvHeaderLine);
                     w.WriteLine(capture.ToCsv());
                 }
-                if (s_Captures.Count > kMaxFileRows) Trim();
             }
             catch (Exception e)
             {
                 Logger.Warn($"Could not write traffic capture: {e.Message}");
             }
+            TrimToBudget();
         }
 
         public static void AddHotspots(List<HotspotRow> rows)
@@ -345,7 +368,7 @@ namespace LiveTrafficRouting
             if (rows == null || rows.Count == 0) return;
             EnsureLoaded();
             s_Hotspots.AddRange(rows);
-            Version++;
+            DataChanged();
             try
             {
                 Directory.CreateDirectory(Directory_);
@@ -355,7 +378,6 @@ namespace LiveTrafficRouting
                     if (writeHeader) w.WriteLine(HotspotRow.Header);
                     foreach (HotspotRow r in rows) w.WriteLine(r.ToCsv());
                 }
-                if (s_Hotspots.Count > kMaxHotspotRows) TrimHotspots();
             }
             catch (Exception e)
             {
@@ -426,6 +448,7 @@ namespace LiveTrafficRouting
         {
             public string Id, Mode, Preset, Settings, First, Last;
             public int Hours;
+            public bool Pinned;
         }
 
         /// <summary>Runs of the current city, oldest first.</summary>
@@ -444,6 +467,7 @@ namespace LiveTrafficRouting
                     runs.Add(r);
                 }
                 r.Hours++;
+                r.Pinned = s_Pinned.Contains(c.RunId);
                 if (string.CompareOrdinal(c.GameTime, r.First) < 0) r.First = c.GameTime;
                 if (string.CompareOrdinal(c.GameTime, r.Last) > 0) r.Last = c.GameTime;
             }
@@ -454,13 +478,16 @@ namespace LiveTrafficRouting
         {
             var sb = new StringBuilder("[");
             List<RunSummary> runs = Runs();
+            HashSet<string> baselines = BaselineRuns();
             for (int i = 0; i < runs.Count; i++)
             {
                 RunSummary r = runs[i];
                 sb.Append('{');
                 TrafficCapture.Str(sb, "id", r.Id); TrafficCapture.Str(sb, "mode", r.Mode); TrafficCapture.Str(sb, "preset", r.Preset);
                 TrafficCapture.Str(sb, "settings", r.Settings); TrafficCapture.Str(sb, "first", r.First); TrafficCapture.Str(sb, "last", r.Last);
-                TrafficCapture.Num(sb, "hours", r.Hours, last: true);
+                TrafficCapture.Num(sb, "hours", r.Hours);
+                TrafficCapture.Num(sb, "pinned", r.Pinned ? 1 : 0);
+                TrafficCapture.Num(sb, "baseline", baselines.Contains(r.Id) ? 1 : 0, last: true);
                 sb.Append('}');
                 if (i < runs.Count - 1) sb.Append(',');
             }
@@ -472,10 +499,18 @@ namespace LiveTrafficRouting
         public static string HistoryJson()
         {
             EnsureLoaded();
+            // The newest game hours of the city, plus all hours of its baseline and pinned runs (so an older reference
+            // run is always complete in the comparisons).
+            HashSet<string> always = BaselineRuns();
+            always.UnionWith(s_Pinned);
             var picked = new List<TrafficCapture>();
-            for (int i = s_Captures.Count - 1; i >= 0 && picked.Count < kMaxUiCaptures; i--)
+            int recent = 0;
+            for (int i = s_Captures.Count - 1; i >= 0; i--)
             {
-                if (s_Captures[i].City == CurrentCity) picked.Add(s_Captures[i]);
+                TrafficCapture c = s_Captures[i];
+                if (c.City != CurrentCity) continue;
+                if (recent < kMaxUiCaptures) { picked.Add(c); recent++; }
+                else if (always.Contains(c.RunId)) picked.Add(c);
             }
             var sb = new StringBuilder("[");
             for (int i = picked.Count - 1; i >= 0; i--)
@@ -508,7 +543,7 @@ namespace LiveTrafficRouting
             var runIds = new HashSet<string>(s_Captures.Where(c => match(c)).Select(c => c.RunId));
             string city = CurrentCity;
             int removed = s_Captures.RemoveAll(match);
-            Version++;
+            DataChanged();
             if (removed == 0) return 0;
             try
             {
@@ -551,7 +586,6 @@ namespace LiveTrafficRouting
                     RewriteFile();
                     Logger.Info($"Upgraded the statistics file to the current format. Backup: {backup}");
                 }
-                if (s_Captures.Count > kMaxFileRows) Trim();
             }
             catch (Exception e)
             {
@@ -568,11 +602,24 @@ namespace LiveTrafficRouting
                     HotspotRow r = HotspotRow.FromCsv(lines[i], header);
                     if (r != null) s_Hotspots.Add(r);
                 }
-                if (s_Hotspots.Count > kMaxHotspotRows) TrimHotspots();
             }
             catch (Exception e)
             {
                 Logger.Warn($"Could not read traffic hotspots: {e.Message}");
+            }
+            try
+            {
+                if (File.Exists(PinnedPath))
+                {
+                    foreach (string line in File.ReadAllLines(PinnedPath, Encoding.UTF8))
+                    {
+                        if (!string.IsNullOrWhiteSpace(line)) s_Pinned.Add(line.Trim());
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Logger.Warn($"Could not read pinned runs: {e.Message}");
             }
         }
 
@@ -614,22 +661,92 @@ namespace LiveTrafficRouting
             File.Move(tmp, FilePath);
         }
 
-        /// <summary>Moves the oldest rows to an archive file so the main file stays small.</summary>
-        private static void Trim()
+        // ---------------- Keeping and trimming ----------------
+
+        public static void TogglePin(string runId)
         {
-            int drop = s_Captures.Count - kKeepRows;
-            if (drop <= 0) return;
-            string archive = Path.Combine(Directory_, "captures-archive-" + Stamp() + ".csv");
-            using (var w = new StreamWriter(archive, append: false, Encoding.UTF8))
+            EnsureLoaded();
+            if (!s_Pinned.Remove(runId)) s_Pinned.Add(runId);
+            DataChanged();
+            try
             {
-                w.WriteLine(TrafficCapture.CsvHeaderLine);
-                for (int i = 0; i < drop; i++) w.WriteLine(s_Captures[i].ToCsv());
+                Directory.CreateDirectory(Directory_);
+                File.WriteAllLines(PinnedPath, s_Pinned.ToArray(), Encoding.UTF8);
             }
-            s_Captures.RemoveRange(0, drop);
-            RewriteFile();
-            Prune("captures-archive-");
-            Version++;
-            Logger.Info($"Statistics file trimmed: {drop} oldest game hours moved to {archive}");
+            catch (Exception e)
+            {
+                Logger.Warn($"Could not save pinned runs: {e.Message}");
+            }
+        }
+
+        /// <summary>The newest Native run of each city: the baseline for comparisons.</summary>
+        private static HashSet<string> BaselineRuns()
+        {
+            var newest = new Dictionary<string, TrafficCapture>();
+            foreach (TrafficCapture c in s_Captures)
+            {
+                if (c.Mode != "Native") continue;
+                if (!newest.TryGetValue(c.City, out TrafficCapture n) || c.RealTime >= n.RealTime) newest[c.City] = c;
+            }
+            return new HashSet<string>(newest.Values.Select(c => c.RunId));
+        }
+
+        /// <summary>Applies "Keep statistics for": moves the oldest whole runs to archive files until under the limit.</summary>
+        public static void TrimToBudget()
+        {
+            EnsureLoaded();
+            if (s_Captures.Count <= KeepHours) return;
+            try
+            {
+                HashSet<string> keep = BaselineRuns();
+                keep.UnionWith(s_Pinned);
+                if (!string.IsNullOrEmpty(CurrentRunId)) keep.Add(CurrentRunId);
+
+                // Oldest first, by when the run started (real time).
+                var order = s_Captures.GroupBy(c => c.RunId)
+                    .Select(g => new { Id = g.Key, Start = g.Min(c => c.RealTime), Count = g.Count() })
+                    .OrderBy(r => r.Start)
+                    .ToList();
+                var drop = new HashSet<string>();
+                int remaining = s_Captures.Count;
+                foreach (var r in order)
+                {
+                    if (remaining <= KeepHours) break;
+                    if (keep.Contains(r.Id)) continue;
+                    drop.Add(r.Id);
+                    remaining -= r.Count;
+                }
+                if (drop.Count == 0) return;
+
+                string stamp = Stamp();
+                ArchiveRows(Path.Combine(Directory_, "captures-archive-" + stamp + ".csv"), TrafficCapture.CsvHeaderLine,
+                    s_Captures.Where(c => drop.Contains(c.RunId)).Select(c => c.ToCsv()));
+                ArchiveRows(Path.Combine(Directory_, "hotspots-archive-" + stamp + ".csv"), HotspotRow.Header,
+                    s_Hotspots.Where(h => drop.Contains(h.RunId)).Select(h => h.ToCsv()));
+                int removed = s_Captures.RemoveAll(c => drop.Contains(c.RunId));
+                s_Hotspots.RemoveAll(h => drop.Contains(h.RunId));
+                RewriteFile();
+                RewriteHotspots();
+                Prune("captures-archive-");
+                Prune("hotspots-archive-");
+                DataChanged();
+                Logger.Info($"Keep statistics for {KeepHours / 24} game days: moved {drop.Count} oldest runs ({removed} game hours) to archive files.");
+            }
+            catch (Exception e)
+            {
+                Logger.Warn($"Could not trim statistics: {e.Message}");
+            }
+        }
+
+        private static void ArchiveRows(string path, string header, IEnumerable<string> lines)
+        {
+            var list = lines.ToList();
+            if (list.Count == 0) return;
+            using (var w = new StreamWriter(path, append: false, Encoding.UTF8))
+            {
+                w.WriteLine(header);
+                foreach (string l in list) w.WriteLine(l);
+            }
         }
 
         private static void RewriteHotspots()
@@ -643,21 +760,6 @@ namespace LiveTrafficRouting
             }
             if (File.Exists(HotspotPath)) File.Delete(HotspotPath);
             File.Move(tmp, HotspotPath);
-        }
-
-        private static void TrimHotspots()
-        {
-            int drop = s_Hotspots.Count - kKeepHotspotRows;
-            if (drop <= 0) return;
-            string archive = Path.Combine(Directory_, "hotspots-archive-" + Stamp() + ".csv");
-            using (var w = new StreamWriter(archive, append: false, Encoding.UTF8))
-            {
-                w.WriteLine(HotspotRow.Header);
-                for (int i = 0; i < drop; i++) w.WriteLine(s_Hotspots[i].ToCsv());
-            }
-            s_Hotspots.RemoveRange(0, drop);
-            RewriteHotspots();
-            Prune("hotspots-archive-");
         }
 
         private static string CopyAside(string file, string prefix)
