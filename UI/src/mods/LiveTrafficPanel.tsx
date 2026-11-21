@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { bindValue, useValue } from "cs2/api";
-import { FloatingButton, Panel } from "cs2/ui";
+import { FloatingButton, Panel, Tooltip } from "cs2/ui";
 import styles from "./LiveTrafficPanel.module.scss";
 
 // Bindings from TrafficUISystem.cs (JSON strings).
@@ -98,12 +98,43 @@ function sameHours(byHour: ByHour): { native: Average; live: Average; slots: num
     return { native: sum(n, slots), live: sum(l, slots), slots: slots.length };
 }
 
-const Row = ({ label, value, hint }: { label: string; value: string; hint?: string }) => (
-    <div className={styles.row} title={hint}>
-        <div className={styles.rowLabel}>{label}</div>
-        <div className={styles.rowValue}>{value}</div>
-    </div>
+const Row = ({ label, value, hint }: { label: string; value: string; hint?: string }) => {
+    const row = (
+        <div className={styles.row}>
+            <div className={styles.rowLabel}>{label}{hint ? <span className={styles.hintMark}> ?</span> : null}</div>
+            <div className={styles.rowValue}>{value}</div>
+        </div>
+    );
+    return hint ? <Tooltip tooltip={<div className={styles.tip}>{hint}</div>}>{row}</Tooltip> : row;
+};
+
+/** Hour label under a timeline bar: "14", or the date at midnight. */
+function barLabel(t: string, h: number): string {
+    if (h === 0 && t.length >= 10) return t.substring(5, 10);
+    return String(h).padStart(2, "0");
+}
+
+const TipLine = ({ label, value }: { label: string; value: string }) => (
+    <div className={styles.tipLine}><span>{label}</span><span>{value}</span></div>
 );
+
+function captureTip(c: Capture): JSX.Element {
+    return (
+        <div className={styles.tip}>
+            <div className={styles.tipTitle}>{c.t} - {modeLabel(c.mode, c.preset)}</div>
+            <TipLine label="Vehicles" value={fmt(c.veh)} />
+            <TipLine label="Real speed" value={fmt(c.speed, 1, "%")} />
+            <TipLine label="Waiting in queues" value={fmt(c.queued, 1, "%")} />
+            <TipLine label="Jam warnings (avg / max)" value={`${fmt(c.jams, 1)} / ${fmt(c.jamsMax)}`} />
+            <TipLine label="Traffic flow (game)" value={fmt(c.flow, 0, "%")} />
+            <TipLine label="On local streets" value={fmt(c.local, 0, "%")} />
+            <TipLine label="Nav vs others" value={c.otherKmh > 0 ? `${fmt(c.navKmh, 1)} / ${fmt(c.otherKmh, 1)} km/h` : "-"} />
+            {c.mode !== "Native" && (
+                <TipLine label="Re-routes (faster)" value={`${c.rr} (${c.rrBetter})`} />
+            )}
+        </div>
+    );
+}
 
 const Toggle = ({ label, selected, onClick }: { label: string; selected: boolean; onClick: () => void }) => (
     <div className={selected ? `${styles.toggle} ${styles.toggleOn}` : styles.toggle} onClick={onClick}>
@@ -123,6 +154,7 @@ export const LiveTrafficPanel = () => {
     const [view, setView] = useState<View>("Timeline");
     const [scope, setScope] = useState<TableScope>("SameHours");
     const [metricKey, setMetricKey] = useState<MetricKey>("speed");
+    const [hover, setHover] = useState<number>(-1);
 
     const currentJson = useValue(current$);
     const historyJson = useValue(history$);
@@ -229,8 +261,8 @@ export const LiveTrafficPanel = () => {
                         {/* Charts */}
                         <div className={styles.sectionTitle}>History</div>
                         <div className={styles.toggles}>
-                            <Toggle label="Timeline" selected={view === "Timeline"} onClick={() => setView("Timeline")} />
-                            <Toggle label="By time of day" selected={view === "TimeOfDay"} onClick={() => setView("TimeOfDay")} />
+                            <Toggle label="Timeline" selected={view === "Timeline"} onClick={() => { setView("Timeline"); setHover(-1); }} />
+                            <Toggle label="By time of day" selected={view === "TimeOfDay"} onClick={() => { setView("TimeOfDay"); setHover(-1); }} />
                             <div className={styles.spacer} />
                             {(["All", "Native", "Live"] as Filter[]).map(f => (
                                 <Toggle key={f} label={f === "Live" ? "Live traffic" : f} selected={filter === f} onClick={() => setFilter(f)} />
@@ -246,19 +278,36 @@ export const LiveTrafficPanel = () => {
                             <div className={styles.empty}>No game hours recorded for this filter yet.</div>
                         ) : (
                             <>
-                                <div className={styles.chart}>
+                                <div className={styles.detail}>
+                                    {(() => {
+                                        const i = hover >= 0 && hover < timeline.length ? hover : timeline.length - 1;
+                                        const c = timeline[i];
+                                        return `${c.t} - ${modeLabel(c.mode, c.preset)} - ${metric.label}: ${fmt(timelineValues[i], 1, metric.unit)}`;
+                                    })()}
+                                </div>
+                                <div className={styles.chart} onMouseLeave={() => setHover(-1)}>
                                     {timeline.map((c, i) => (
-                                        <div className={styles.barSlot} key={c.t + i} title={`${c.t} ${modeLabel(c.mode, c.preset)}: ${fmt(timelineValues[i], 1, metric.unit)}`}>
-                                            <div
-                                                className={c.mode === "Live" ? styles.barLive : c.mode === "Native" ? styles.barNative : styles.barMixed}
-                                                style={{ height: barHeight(timelineValues[i]) }}
-                                            />
-                                        </div>
+                                        <Tooltip key={c.t + i} tooltip={captureTip(c)}>
+                                            <div className={hover === i ? `${styles.barSlot} ${styles.barSlotHover}` : styles.barSlot}
+                                                 onMouseEnter={() => setHover(i)}>
+                                                <div
+                                                    className={c.mode === "Live" ? styles.barLive : c.mode === "Native" ? styles.barNative : styles.barMixed}
+                                                    style={{ height: barHeight(timelineValues[i]) }}
+                                                />
+                                            </div>
+                                        </Tooltip>
                                     ))}
                                 </div>
+                                <div className={styles.barLabels}>
+                                    {timeline.map((c, i) => {
+                                        const every = timeline.length > 24 ? 4 : timeline.length > 12 ? 2 : 1;
+                                        const show = i % every === 0 || c.h === 0;
+                                        return <div className={styles.barLabel} key={c.t + i}>{show ? barLabel(c.t, c.h) : ""}</div>;
+                                    })}
+                                </div>
                                 <div className={styles.chartFoot}>
-                                    <span>{timeline[0].t}</span>
-                                    <span>{metric.label}: last {fmt(timelineValues[timelineValues.length - 1], 1, metric.unit)}{better}</span>
+                                    <span>Game hours, from {timeline[0].t}</span>
+                                    <span>max {fmt(maxAbs, 1, metric.unit)}{better}</span>
                                 </div>
                             </>
                         ))}
@@ -267,25 +316,48 @@ export const LiveTrafficPanel = () => {
                             <div className={styles.empty}>No game hours recorded for this filter yet.</div>
                         ) : (
                             <>
-                                <div className={styles.chart}>
+                                <div className={styles.detail}>
+                                    {(() => {
+                                        const h = hover >= 0 && hover < 24 ? hover : -1;
+                                        if (h < 0) return "Hover an hour to compare Native and Live";
+                                        const n = nativeHours[h];
+                                        const l = liveHours[h];
+                                        const nv = n?.hours ? metric.value(n) : undefined;
+                                        const lv = l?.hours ? metric.value(l) : undefined;
+                                        const diff = nv !== undefined && lv !== undefined ? `, difference ${lv - nv >= 0 ? "+" : ""}${fmt(lv - nv, 1, metric.unit)}` : "";
+                                        return `${String(h).padStart(2, "0")}:00 - ${metric.label}: Native ${fmt(nv, 1, metric.unit)} (${n?.hours ?? 0} h), Live ${fmt(lv, 1, metric.unit)} (${l?.hours ?? 0} h)${diff}`;
+                                    })()}
+                                </div>
+                                <div className={styles.chart} onMouseLeave={() => setHover(-1)}>
                                     {Array.from({ length: 24 }, (_, h) => {
                                         const n = nativeHours[h];
                                         const l = liveHours[h];
-                                        return (
-                                            <div className={styles.hourSlot} key={h}
-                                                 title={`${String(h).padStart(2, "0")}:00  Native: ${n?.hours ? fmt(metric.value(n), 1, metric.unit) : "-"}  Live: ${l?.hours ? fmt(metric.value(l), 1, metric.unit) : "-"}`}>
-                                                {showNative && (
-                                                    <div className={styles.barNative} style={{ height: n?.hours ? barHeight(metric.value(n)) : "0%" }} />
-                                                )}
-                                                {showLive && (
-                                                    <div className={styles.barLive} style={{ height: l?.hours ? barHeight(metric.value(l)) : "0%" }} />
-                                                )}
+                                        const tip = (
+                                            <div className={styles.tip}>
+                                                <div className={styles.tipTitle}>{String(h).padStart(2, "0")}:00 to {String(h + 1).padStart(2, "0")}:00 - {metric.label}</div>
+                                                <TipLine label={`Native (${n?.hours ?? 0} h)`} value={n?.hours ? fmt(metric.value(n), 1, metric.unit) : "-"} />
+                                                <TipLine label={`Live traffic (${l?.hours ?? 0} h)`} value={l?.hours ? fmt(metric.value(l), 1, metric.unit) : "-"} />
                                             </div>
+                                        );
+                                        return (
+                                            <Tooltip key={h} tooltip={tip}>
+                                                <div className={hover === h ? `${styles.hourSlot} ${styles.barSlotHover}` : styles.hourSlot}
+                                                     onMouseEnter={() => setHover(h)}>
+                                                    {showNative && (
+                                                        <div className={styles.barNative} style={{ height: n?.hours ? barHeight(metric.value(n)) : "0%" }} />
+                                                    )}
+                                                    {showLive && (
+                                                        <div className={styles.barLive} style={{ height: l?.hours ? barHeight(metric.value(l)) : "0%" }} />
+                                                    )}
+                                                </div>
+                                            </Tooltip>
                                         );
                                     })}
                                 </div>
-                                <div className={styles.hourAxis}>
-                                    <span>00</span><span>06</span><span>12</span><span>18</span><span>24</span>
+                                <div className={styles.barLabels}>
+                                    {Array.from({ length: 24 }, (_, h) => (
+                                        <div className={styles.barLabel} key={h}>{h % 3 === 0 ? String(h).padStart(2, "0") : ""}</div>
+                                    ))}
                                 </div>
                                 <div className={styles.chartFoot}>
                                     <span>Average per hour of the day</span>

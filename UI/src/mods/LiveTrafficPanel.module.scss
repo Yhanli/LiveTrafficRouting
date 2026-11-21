@@ -181,3 +181,42 @@ $mixed: #b0a060;
     color: rgba(255, 255, 255, 0.5);
     padding: 0 4rem;
 }
+
+.barSlotHover { background-color: rgba(255, 255, 255, 0.12); }
+
+.barLabels {
+    display: flex;
+    flex-direction: row;
+    padding: 0 4rem;
+}
+.barLabel {
+    flex: 1;
+    margin: 0 1rem;
+    text-align: center;
+    font-size: 9rem;
+    color: rgba(255, 255, 255, 0.55);
+    white-space: nowrap;
+}
+
+.detail {
+    font-size: 11rem;
+    color: rgba(255, 255, 255, 0.85);
+    margin-bottom: 3rem;
+    min-height: 15rem;
+}
+
+.hintMark { color: rgba(255, 255, 255, 0.4); }
+
+.tip {
+    display: flex;
+    flex-direction: column;
+    max-width: 320rem;
+    font-size: 12rem;
+}
+.tipTitle { font-weight: bold; margin-bottom: 3rem; }
+.tipLine {
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    span:last-child { margin-left: 12rem; }
+}
