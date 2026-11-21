@@ -225,6 +225,7 @@ $mixed: #b0a060;
     display: flex;
     flex-direction: row;
     justify-content: space-between;
+    align-items: flex-start;
     span:last-child { margin-left: 12rem; }
 }
 
@@ -376,3 +377,10 @@ $runB: #5ecf8a;
     background-color: rgba(111, 143, 179, 0.35);
     color: white;
 }
+
+.tipNote {
+    margin-top: 4rem;
+    font-size: 11rem;
+    color: rgba(255, 255, 255, 0.65);
+}
+.placeRow { display: flex; flex-direction: row; align-items: center; }

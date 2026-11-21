@@ -347,8 +347,8 @@ const Chart = ({ slots, metric, hover, setHover, idle }: {
                 {slots.map(s => <div className={styles.barLabel} key={s.key}>{s.label}</div>)}
             </div>
             <div className={styles.chartFoot}>
-                <span>{metric.label}, max {fmt(maxAbs, metric.digits, metric.unit)}</span>
-                <span>{better}{metric.key === "navGain" ? " (faded bar = navigation slower)" : ""}</span>
+                <span>{`${metric.label}, max ${fmt(maxAbs, metric.digits, metric.unit)}`}</span>
+                <span>{`${better}${metric.key === "navGain" ? " (faded bar = navigation slower)" : ""}`}</span>
             </div>
         </>
     );
@@ -432,7 +432,7 @@ export const LiveTrafficPanel = () => {
                 detail: `${t} - ${m.label}: ${nameA} ${fmt(va, m.digits, m.unit)}, ${nameB} ${fmt(vb, m.digits, m.unit)}${d.text !== "-" ? `, difference ${d.text}` : ""}`,
                 tip: (
                     <div className={styles.tip}>
-                        <div className={styles.tipTitle}>{t} - {m.label}</div>
+                        <div className={styles.tipTitle}>{`${t} - ${m.label}`}</div>
                         <TipLine label={nameA} value={fmt(va, m.digits, m.unit)} />
                         <TipLine label={nameB} value={fmt(vb, m.digits, m.unit)} />
                         {cb && cb.mode === "Live" && <TipLine label={`${nameB}: re-routes (faster)`} value={`${cb.rr} (${cb.rrBetter})`} />}
@@ -456,7 +456,7 @@ export const LiveTrafficPanel = () => {
                 detail: `${pad2(h)}:00 - ${m.label}: ${nameA} ${fmt(va, m.digits, m.unit)} (${ha[h]?.hours ?? 0} h), ${nameB} ${fmt(vb, m.digits, m.unit)} (${hb[h]?.hours ?? 0} h)${d.text !== "-" ? `, difference ${d.text}` : ""}`,
                 tip: (
                     <div className={styles.tip}>
-                        <div className={styles.tipTitle}>{pad2(h)}:00 to {pad2((h + 1) % 24)}:00 - {m.label}</div>
+                        <div className={styles.tipTitle}>{`${pad2(h)}:00 to ${pad2((h + 1) % 24)}:00 - ${m.label}`}</div>
                         <TipLine label={`${nameA} (${ha[h]?.hours ?? 0} h)`} value={fmt(va, m.digits, m.unit)} />
                         <TipLine label={`${nameB} (${hb[h]?.hours ?? 0} h)`} value={fmt(vb, m.digits, m.unit)} />
                     </div>
@@ -555,11 +555,15 @@ export const LiveTrafficPanel = () => {
                                         const sig = significance(capsA, capsB, scope, m);
                                         const sigTip = (
                                             <div className={styles.tip}>
-                                                <div className={styles.tipTitle}>{label}: {d.text} {sig.verdict !== "n/a" ? `(${VERDICT_TEXT[sig.verdict]})` : ""}</div>
-                                                {sig.verdict === "n/a" ? <div>Not enough game hours to tell yet.</div> : (<>
-                                                    <div>95% range of the difference: {d.text !== "-" ? `${fmt((vb ?? 0) - (va ?? 0) - sig.range, m.digits)} to ${fmt((vb ?? 0) - (va ?? 0) + sig.range, m.digits)}${m.unit}` : "-"}</div>
-                                                    <div>Based on {sig.n} {sig.paired ? "paired " : ""}hours{sig.nEff < sig.n - 0.5 ? `, counted as about ${sig.nEff.toFixed(0)} independent ones (neighbouring hours are related)` : ""}. t = {Math.abs(sig.t) >= 99 ? "very large" : sig.t.toFixed(1)}.</div>
-                                                    <div>Clear: |t| 3 or more, very unlikely to be chance. Likely: |t| 2 to 3. Noise: smaller than the simulation's own randomness.</div>
+                                                <div className={styles.tipTitle}>{`${label}: ${d.text}`}</div>
+                                                {sig.verdict === "n/a" ? <div>{"Not enough game hours to tell yet."}</div> : (<>
+                                                    <TipLine label="Verdict" value={sig.verdict === "clear" ? "clear: very unlikely to be chance" : sig.verdict === "likely" ? "likely real" : "noise: could be chance"} />
+                                                    <TipLine label="95% range of the difference"
+                                                             value={d.text !== "-" ? `${fmt((vb ?? 0) - (va ?? 0) - sig.range, m.digits)} to ${fmt((vb ?? 0) - (va ?? 0) + sig.range, m.digits)}${m.unit}` : "-"} />
+                                                    <TipLine label={sig.paired ? "Paired hours compared" : "Hours compared"}
+                                                             value={sig.nEff < sig.n - 0.5 ? `${sig.n} (about ${sig.nEff.toFixed(0)} independent)` : `${sig.n}`} />
+                                                    <TipLine label="Strength (t)" value={Math.abs(sig.t) >= 99 ? "very large" : sig.t.toFixed(1)} />
+                                                    <div className={styles.tipNote}>{"Neighbouring game hours are related (a jam at 08:00 is often still there at 09:00), so they count as fewer independent hours. Clear: t of 3 or more. Likely: t between 2 and 3. Noise: smaller than the simulation's own randomness."}</div>
                                                 </>)}
                                             </div>
                                         );
@@ -579,7 +583,8 @@ export const LiveTrafficPanel = () => {
                                     })}
                                 </div>
                                 <div className={styles.note}>Real?: is the difference bigger than the simulation's own randomness? Hover it for the details. Differences marked noise are not coloured.</div>
-                                <div className={styles.note}>A: {runA?.settings}<br />B: {runB?.settings}</div>
+                                <div className={styles.note}>{`A: ${runA?.settings ?? "-"}`}</div>
+                                <div className={styles.note}>{`B: ${runB?.settings ?? "-"}`}</div>
                             </>)}
                         </>)}
 
@@ -630,11 +635,12 @@ export const LiveTrafficPanel = () => {
                                                 const jam = (x?: Hotspot) => (x && x.j >= 0.05 ? ` (${fmt(x.j, 1)})` : "");
                                                 return (
                                                     <div className={styles.tableRow} key={place}>
-                                                        <div className={styles.tableLabel}>
-                                                            <span className={styles.placeKind}>{e.k === "junction" ? "J" : "S"}</span> {place}
+                                                        <div className={`${styles.tableLabel} ${styles.placeRow}`}>
+                                                            <span className={styles.placeKind}>{e.k === "junction" ? "J" : "S"}</span>
+                                                            <span>{place}</span>
                                                         </div>
-                                                        <div className={styles.tableCell}>{fmt(va, 1)}{jam(e.a)}</div>
-                                                        <div className={styles.tableCell}>{fmt(vb, 1)}{jam(e.b)}</div>
+                                                        <div className={styles.tableCell}>{`${fmt(va, 1)}${jam(e.a)}`}</div>
+                                                        <div className={styles.tableCell}>{`${fmt(vb, 1)}${jam(e.b)}`}</div>
                                                         <div className={`${styles.tableCellWide} ${d.cls}`}>{d.text}</div>
                                                     </div>
                                                 );
@@ -649,7 +655,7 @@ export const LiveTrafficPanel = () => {
                         {tab === "Rerouting" && (<>
                             {runs.length > 0 && pickers}
                             {rrTotals ? (<>
-                                <div className={styles.sectionTitle}>Run {rrTotalsName}: average per game hour</div>
+                                <div className={styles.sectionTitle}>{`Run ${rrTotalsName}: average per game hour`}</div>
                                 <InfoRow label="Re-routes" value={`${fmt(rrTotals.rr)} (${fmt(rrTotals.rrTrucks)} by trucks)`} />
                                 <InfoRow label="Found a faster route"
                                          value={rrTotals.rrBetter + rrTotals.rrNoBetter > 0 ? `${fmt((100 * rrTotals.rrBetter) / (rrTotals.rrBetter + rrTotals.rrNoBetter), 0, "%")} (avg ${fmt(rrTotals.rrSaved, 0, "%")} of the rest of the trip saved, estimate)` : "-"} />

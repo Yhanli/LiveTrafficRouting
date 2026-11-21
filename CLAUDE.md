@@ -13,6 +13,9 @@ Cities: Skylines II **code mod** (C#, Unity ECS). Goal: congestion-aware routing
   `Cities2_Data/Content/Game/.ModdingToolchain/npx-create-csii-ui-mod`). `npm run build` writes `UI/build`
   (webpack output changed from the Mods folder to `build`), and the csproj target `DeployUIModule` copies it into
   the mod folder after the toolchain's deploy (which deletes the folder first). `build.ps1` runs both.
+  **Game UI (Coherent Gameface) gotchas:** every element is a flex box, so text pieces mixed with `{values}` in one
+  element stack on separate lines: build each line as ONE template string. The HTML `title` attribute does nothing;
+  use `Tooltip` from `cs2/ui`. Overflowing content is clipped, not scrolled: keep each tab short.
   C# side: `TrafficUISystem` (bindings group `liveTrafficRouting`: `current`, `history`, `averages`, JSON strings).
 - Statistics (only while the "Statistics panel" setting is on): `TrafficReportSystem` samples every 1024 frames and
   records one `TrafficCapture` per game hour, tagged with a run (new run on load, delete, or any settings change;
