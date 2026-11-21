@@ -235,7 +235,7 @@ namespace LiveTrafficRouting
             string Get(string name) { int i = header.IndexOf(name); return i >= 0 && i < f.Count ? f[i] : ""; }
             float.TryParse(Get("queued"), NumberStyles.Float, CultureInfo.InvariantCulture, out float q);
             float.TryParse(Get("jams"), NumberStyles.Float, CultureInfo.InvariantCulture, out float j);
-            var r = new HotspotRow { RunId = Get("run_id"), City = Get("city"), GameTime = Get("game_time"), Place = Get("place"), Kind = Get("kind"), Queued = q, Jams = j };
+            var r = new HotspotRow { RunId = Get("run_id"), City = Get("city"), GameTime = Get("game_time"), Place = TrafficReportSystem.CleanName(Get("place")), Kind = Get("kind"), Queued = q, Jams = j };
             return string.IsNullOrEmpty(r.Place) ? null : r;
         }
 
@@ -301,6 +301,13 @@ namespace LiveTrafficRouting
         private static readonly List<TrafficCapture> s_Captures = new List<TrafficCapture>();
         private static readonly List<HotspotRow> s_Hotspots = new List<HotspotRow>();
         private static readonly HashSet<string> s_Pinned = new HashSet<string>();
+        // Place name -> the street (aggregate) or junction (node) entity last seen with that name, this session only
+        // (entity ids are not stable across loads). Used to show a hotspot on the map.
+        private static readonly Dictionary<string, Unity.Entities.Entity> s_PlaceEntities = new Dictionary<string, Unity.Entities.Entity>();
+
+        public static void RememberPlace(string place, Unity.Entities.Entity entity) => s_PlaceEntities[place] = entity;
+
+        public static bool TryGetPlace(string place, out Unity.Entities.Entity entity) => s_PlaceEntities.TryGetValue(place, out entity);
         private static bool s_Loaded;
 
         public static TrafficSnapshot Current { get; private set; } = new TrafficSnapshot();

@@ -1,7 +1,11 @@
 using System.Globalization;
 using System.Text;
 using Colossal.UI.Binding;
+using Game.Net;
 using Game.UI;
+using Game.UI.InGame;
+using Unity.Collections;
+using Unity.Entities;
 
 namespace LiveTrafficRouting
 {
@@ -32,7 +36,54 @@ namespace LiveTrafficRouting
             AddBinding(new TriggerBinding(Group, "deleteLive", StatisticsReset.DeleteLive));
             AddBinding(new TriggerBinding<string>(Group, "deleteRun", StatisticsReset.DeleteRun));
             AddBinding(new TriggerBinding<string>(Group, "togglePin", TrafficReportStore.TogglePin));
+            AddBinding(new TriggerBinding<string>(Group, "focusPlace", FocusPlace));
             Logger.Info("TrafficUISystem created.");
+        }
+
+        /// <summary>
+        /// Shows a hotspot on the map: selects the street or junction (opens the game's info panel) and lets the
+        /// camera follow it, like the game's own focus button. A street is shown at a segment in its middle.
+        /// </summary>
+        private void FocusPlace(string place)
+        {
+            Entity entity = Entity.Null;
+            if (!TrafficReportStore.TryGetPlace(place, out entity) || !EntityManager.Exists(entity))
+            {
+                entity = FindStreetByName(place);
+            }
+            if (entity == Entity.Null)
+            {
+                Logger.Info($"Hotspot '{place}' not found on the map (it may be from an earlier session or was renamed).");
+                return;
+            }
+            Entity target = entity;
+            if (EntityManager.HasBuffer<AggregateElement>(entity))
+            {
+                DynamicBuffer<AggregateElement> edges = EntityManager.GetBuffer<AggregateElement>(entity, true);
+                if (edges.Length > 0) target = edges[edges.Length / 2].m_Edge;
+            }
+            SelectedInfoUISystem selected = World.GetOrCreateSystemManaged<SelectedInfoUISystem>();
+            selected.SetSelection(target);
+            selected.Focus(target);
+        }
+
+        /// <summary>For hotspots recorded in an earlier session: look the street up by its name.</summary>
+        private Entity FindStreetByName(string place)
+        {
+            NameSystem names = World.GetOrCreateSystemManaged<NameSystem>();
+            EntityQuery query = GetEntityQuery(ComponentType.ReadOnly<Aggregate>(), ComponentType.Exclude<Game.Common.Deleted>());
+            using (NativeArray<Entity> streets = query.ToEntityArray(Allocator.Temp))
+            {
+                foreach (Entity street in streets)
+                {
+                    if (TrafficReportSystem.CleanName(names.GetRenderedLabelName(street)) == place)
+                    {
+                        TrafficReportStore.RememberPlace(place, street);
+                        return street;
+                    }
+                }
+            }
+            return Entity.Null;
         }
 
         private void Refresh()

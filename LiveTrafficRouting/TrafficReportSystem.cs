@@ -537,6 +537,8 @@ namespace LiveTrafficRouting
                     name = JunctionName(kv.Key);
                 }
                 else continue; // parking lots, buildings, etc.
+                name = CleanName(name);
+                TrafficReportStore.RememberPlace(name, kv.Key);
                 rows.Add(new HotspotRow
                 {
                     RunId = capture.RunId,
@@ -552,6 +554,22 @@ namespace LiveTrafficRouting
             return rows;
         }
 
+        /// <summary>
+        /// Some networks from assets have no translated name and come back as the raw key, e.g.
+        /// "Assets.NAME[Invisible Pathway]". Show the part in brackets instead.
+        /// </summary>
+        internal static string CleanName(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return name;
+            int open = name.IndexOf('[');
+            int close = name.LastIndexOf(']');
+            if (name.StartsWith("Assets.", StringComparison.Ordinal) && open > 0 && close > open + 1)
+            {
+                return name.Substring(open + 1, close - open - 1);
+            }
+            return name;
+        }
+
         /// <summary>"Street A / Street B" from the streets that meet at a junction.</summary>
         private string JunctionName(Entity node)
         {
@@ -564,7 +582,7 @@ namespace LiveTrafficRouting
                 if (!EntityManager.HasComponent<Aggregated>(edge)) continue;
                 Entity agg = EntityManager.GetComponentData<Aggregated>(edge).m_Aggregate;
                 if (agg == Entity.Null) continue;
-                string n = m_NameSystem.GetRenderedLabelName(agg);
+                string n = CleanName(m_NameSystem.GetRenderedLabelName(agg));
                 if (!string.IsNullOrEmpty(n) && !names.Contains(n)) names.Add(n);
             }
             return names.Count == 0 ? "Junction" : names.Count == 1 ? names[0] + " (junction)" : string.Join(" / ", names);

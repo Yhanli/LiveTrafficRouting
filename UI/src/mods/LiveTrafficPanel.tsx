@@ -629,20 +629,22 @@ export const LiveTrafficPanel = () => {
                                                 <div className={styles.tableHeadWide}>B vs A</div>
                                             </div>
                                             {list.map(([place, e]) => {
-                                                const va = e.a ? e.a.q : 0;
-                                                const vb = e.b ? e.b.q : 0;
+                                                // A run recorded before hotspots existed has no data at all: show "-", not 0.
+                                                const hasA = ha.length > 0;
+                                                const hasB = hb.length > 0;
+                                                const va = hasA ? (e.a ? e.a.q : 0) : null;
+                                                const vb = hasB ? (e.b ? e.b.q : 0) : null;
                                                 const d = fmtDiff(va, vb, qm);
                                                 const jam = (x?: Hotspot) => (x && x.j >= 0.05 ? ` (${fmt(x.j, 1)})` : "");
                                                 return (
-                                                    <div className={styles.tableRow} key={place}>
-                                                        <div className={`${styles.tableLabel} ${styles.placeRow}`}>
-                                                            <span className={styles.placeKind}>{e.k === "junction" ? "J" : "S"}</span>
-                                                            <span>{place}</span>
+                                                    <Tooltip key={place} tooltip={<div className={styles.tip}>{"Click to show it on the map"}</div>}>
+                                                        <div className={`${styles.tableRow} ${styles.clickRow}`} onClick={() => trigger(GROUP, "focusPlace", place)}>
+                                                            <div className={styles.tableLabel}>{e.k === "junction" ? `${place} (junction)` : place}</div>
+                                                            <div className={styles.tableCell}>{va === null ? "-" : `${fmt(va, 1)}${jam(e.a)}`}</div>
+                                                            <div className={styles.tableCell}>{vb === null ? "-" : `${fmt(vb, 1)}${jam(e.b)}`}</div>
+                                                            <div className={`${styles.tableCellWide} ${d.cls}`}>{d.text}</div>
                                                         </div>
-                                                        <div className={styles.tableCell}>{`${fmt(va, 1)}${jam(e.a)}`}</div>
-                                                        <div className={styles.tableCell}>{`${fmt(vb, 1)}${jam(e.b)}`}</div>
-                                                        <div className={`${styles.tableCellWide} ${d.cls}`}>{d.text}</div>
-                                                    </div>
+                                                    </Tooltip>
                                                 );
                                             })}
                                         </div>
