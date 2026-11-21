@@ -59,7 +59,7 @@ $mixed: #b0a060;
     font-size: 13rem;
     border-bottom: 1rem solid rgba(255, 255, 255, 0.07);
 }
-.rowLabel { color: rgba(255, 255, 255, 0.7); }
+.rowLabel { color: rgba(255, 255, 255, 0.7); display: flex; flex-direction: row; align-items: center; }
 .rowValue { color: white; text-align: right; }
 
 .table { display: flex; flex-direction: column; font-size: 13rem; }
@@ -205,7 +205,14 @@ $mixed: #b0a060;
     min-height: 15rem;
 }
 
-.hintMark { color: rgba(255, 255, 255, 0.4); }
+.hintMark {
+    margin-left: 5rem;
+    padding: 0 4rem;
+    font-size: 10rem;
+    border-radius: 7rem;
+    color: rgba(255, 255, 255, 0.6);
+    background-color: rgba(255, 255, 255, 0.12);
+}
 
 .tip {
     display: flex;
@@ -219,4 +226,24 @@ $mixed: #b0a060;
     flex-direction: row;
     justify-content: space-between;
     span:last-child { margin-left: 12rem; }
+}
+
+.tabs {
+    display: flex;
+    flex-direction: row;
+    margin-bottom: 4rem;
+    border-bottom: 1rem solid rgba(255, 255, 255, 0.12);
+}
+.tab {
+    flex: 1;
+    text-align: center;
+    padding: 5rem 0;
+    font-size: 13rem;
+    color: rgba(255, 255, 255, 0.65);
+    cursor: pointer;
+    &:hover { color: white; background-color: rgba(255, 255, 255, 0.06); }
+}
+.tabOn {
+    color: white;
+    border-bottom: 2rem solid #5ecf8a;
 }
