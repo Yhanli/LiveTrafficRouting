@@ -20,7 +20,7 @@ namespace LiveTrafficRouting
                 { s.GetSettingsLocaleID(), "Live Traffic Routing" },
                 { s.GetOptionTabLocaleID(LiveTrafficSettings.GeneralSection), "General" },
                 { s.GetOptionGroupLocaleID(LiveTrafficSettings.TrafficGroup), "Traffic" },
-                { s.GetOptionGroupLocaleID(LiveTrafficSettings.DebugGroup), "Troubleshooting" },
+                { s.GetOptionGroupLocaleID(LiveTrafficSettings.DebugGroup), "For traffic geeks" },
 
                 { s.GetOptionLabelLocaleID(nameof(LiveTrafficSettings.Awareness)), "How drivers react to traffic jams" },
                 { s.GetOptionDescLocaleID(nameof(LiveTrafficSettings.Awareness)),
@@ -30,7 +30,7 @@ namespace LiveTrafficRouting
                     "Off: the game's normal behaviour (the sliders are greyed out).\n" +
                     "Relaxed: drivers only avoid bad jams and mostly stay on main roads. About 1 in 7 drivers re-routes mid-trip.\n" +
                     "Balanced: recommended. New trips avoid jams within about 10-20 game minutes; about 1 in 3 drivers re-routes mid-trip.\n" +
-                    "Eager: drivers react fast and take side streets to dodge any jam; most drivers re-route mid-trip. Can move traffic onto residential streets.\n" +
+                    "Eager: drivers react fast and strongly; a jammed road is avoided almost like a closed one, and 3 in 4 drivers re-route mid-trip. Can move traffic onto residential streets.\n" +
                     "Custom: your own mix. Picking a preset fills in the sliders below; changing any slider switches to Custom." },
                 { s.GetEnumValueLocaleID(TrafficAwareness.Off), "Off (game default)" },
                 { s.GetEnumValueLocaleID(TrafficAwareness.Relaxed), "Relaxed" },
@@ -52,13 +52,13 @@ namespace LiveTrafficRouting
                 { s.GetOptionDescLocaleID(nameof(LiveTrafficSettings.PenaltyStrength)),
                     "How heavily drivers count the delay of a jammed road when choosing a route. 100%: as measured. " +
                     "200%: a road where traffic takes twice as long looks three times as slow, so drivers take detours sooner. " +
-                    "Lower: drivers put up with jams on main roads. The limit below still applies." },
+                    "Lower: drivers put up with jams on main roads. Above about 300% even small slowdowns cause detours. The limit below still applies." },
 
                 { s.GetOptionLabelLocaleID(nameof(LiveTrafficSettings.AvoidanceLimit)), "Avoid jams up to (times slower)" },
                 { s.GetOptionDescLocaleID(nameof(LiveTrafficSettings.AvoidanceLimit)),
                     "The worst a jammed road can look to drivers, compared with driving it at the speed limit. " +
                     "At 10, drivers accept a detour up to 10 times as long as the jammed stretch. " +
-                    "Lower keeps traffic on main roads even when they are busy; higher lets drivers detour further." },
+                    "Lower keeps traffic on main roads even when they are busy; higher lets drivers detour further. Above about 50 a jammed road is treated almost as closed." },
 
                 { s.GetOptionLabelLocaleID(nameof(LiveTrafficSettings.RerouteShare)), "Drivers who re-route while driving" },
                 { s.GetOptionDescLocaleID(nameof(LiveTrafficSettings.RerouteShare)),
@@ -72,37 +72,16 @@ namespace LiveTrafficRouting
                     "How much worse the rest of a driver's route must get, compared with when they planned it, before they look for another way. " +
                     "Lower: drivers react to smaller jams. Higher: only big jams make drivers change their route." },
 
-                { s.GetOptionGroupLocaleID(LiveTrafficSettings.StatsGroup), "Statistics (measured with the mod on and off)" },
-                { s.GetOptionLabelLocaleID(nameof(LiveTrafficSettings.StatNow)), "Right now" },
-                { s.GetOptionDescLocaleID(nameof(LiveTrafficSettings.StatNow)),
-                    "Measured from every vehicle on the road about once per game minute: their real speed compared with the speed limit, " +
-                    "how many are waiting behind a stopped vehicle, and how many jam warning signs the game shows." },
-                { s.GetOptionLabelLocaleID(nameof(LiveTrafficSettings.StatNavigation)), "Trips with vs without navigation" },
-                { s.GetOptionDescLocaleID(nameof(LiveTrafficSettings.StatNavigation)),
-                    "How fast vehicles get closer to where they are going (straight-line distance per hour), for drivers with live navigation " +
-                    "and for everyone else. With the mod on, a higher number for drivers with navigation means re-routing helps them. " +
-                    "With the mod off both groups drive the same way, so the numbers should be about equal." },
-                { s.GetOptionLabelLocaleID(nameof(LiveTrafficSettings.StatLastHour)), "Last game hour" },
-                { s.GetOptionDescLocaleID(nameof(LiveTrafficSettings.StatLastHour)),
-                    "The last full game hour. Every game hour is saved to ModsData/LiveTrafficRouting/captures.csv, tagged Native (mod off) or Live." },
-                { s.GetOptionLabelLocaleID(nameof(LiveTrafficSettings.StatCompare)), "Native vs live traffic (this city)" },
-                { s.GetOptionDescLocaleID(nameof(LiveTrafficSettings.StatCompare)),
-                    "Averages of all recorded game hours for this city, with the mod off (Native) and on (Live). " +
-                    "For a fair comparison, run both for at least a game day each without changing roads in between." },
-                { s.GetOptionLabelLocaleID(nameof(LiveTrafficSettings.StatModCost)), "Mod processing time" },
-                { s.GetOptionDescLocaleID(nameof(LiveTrafficSettings.StatModCost)),
-                    "How long the mod's traffic and re-routing work takes, measured once per game hour. It runs in the background on a worker thread." },
-
-                { s.GetOptionLabelLocaleID(nameof(LiveTrafficSettings.ResetStatistics)), "Reset statistics for this city" },
-                { s.GetOptionDescLocaleID(nameof(LiveTrafficSettings.ResetStatistics)),
-                    "Deletes all recorded game hours of the current city, to start a new comparison. Other cities are kept, " +
-                    "and the old file is saved as a backup in ModsData/LiveTrafficRouting." },
-                { s.GetOptionWarningLocaleID(nameof(LiveTrafficSettings.ResetStatistics)),
-                    "Delete all recorded statistics of this city? A backup of the file is kept." },
+                { s.GetOptionLabelLocaleID(nameof(LiveTrafficSettings.ShowStatistics)), "Statistics panel" },
+                { s.GetOptionDescLocaleID(nameof(LiveTrafficSettings.ShowStatistics)),
+                    "Shows a traffic icon in the top-left of the game. It opens the Live Traffic panel: how traffic is doing right now, " +
+                    "comparisons between the mod off (Native) and different settings, charts per hour of the day, and re-routing details. " +
+                    "While on, the mod records one row of statistics per game hour (also with the mod off) to " +
+                    "ModsData/LiveTrafficRouting/captures.csv. Off: nothing is recorded, and the mod just does its job." },
 
                 { s.GetOptionLabelLocaleID(nameof(LiveTrafficSettings.LogStatistics)), "Write traffic report to log" },
                 { s.GetOptionDescLocaleID(nameof(LiveTrafficSettings.LogStatistics)),
-                    "Every game hour, write the traffic report (also when the mod is off) to Logs/LiveTrafficRouting.log. " +
+                    "Every game hour, also write the statistics (needs the statistics panel on) to Logs/LiveTrafficRouting.log. " +
                     "Only needed when reporting a problem." },
 
                 { s.GetOptionLabelLocaleID(nameof(LiveTrafficSettings.ResetSettings)), "Reset settings" },

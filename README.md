@@ -29,7 +29,7 @@ Background and design: [docs/research.md](docs/research.md).
 | Off (game default) | The game's normal behaviour. |
 | Relaxed | Drivers only avoid bad jams and mostly stay on main roads. |
 | Balanced (default) | Drivers starting a trip avoid jams within about 10–20 game minutes. |
-| Eager | Drivers react fast and take side streets to dodge any jam. Can push traffic into residential streets. |
+| Eager | Drivers react fast and strongly: a jammed road is avoided almost like a closed one, 3 in 4 drivers re-route mid-trip. Can push traffic into residential streets. |
 | Custom | Your own mix. Chosen automatically when you change a slider. |
 
 The sliders are always visible (greyed out when Off). Picking a preset fills them in with these values; changing any
@@ -38,18 +38,23 @@ slider switches the dropdown to Custom:
 | Slider | Meaning | Relaxed | Balanced | Eager |
 |---|---|---|---|---|
 | Right now vs usual traffic | 100% = only current traffic, 0% = only the usual traffic for this time of day (vanilla) | 50% | 75% | 100% |
-| How quickly jams are noticed | Higher = notices new and cleared jams sooner, but traffic may swing between roads | 30% | 50% | 75% |
-| Jam penalty strength | Multiplies the extra time a jam adds (200%: twice as slow looks three times as slow) | 75% | 100% | 150% |
-| Avoid jams up to (times slower) | The worst a jammed road can look vs driving it at the limit | 4× | 10× | 20× |
-| Drivers who re-route while driving | Share of drivers with live navigation (0% = no mid-trip re-routing) | 15% | 30% | 60% |
-| Re-route when the way ahead gets slower by | How much worse the rest of the route must get vs when planned | 50% | 30% | 20% |
+| How quickly jams are noticed | Higher = notices new and cleared jams sooner, but traffic may swing between roads | 30% | 50% | 80% |
+| Jam penalty strength (25-1000%) | Multiplies the extra time a jam adds (200%: twice as slow looks three times as slow) | 75% | 100% | 250% |
+| Avoid jams up to (2-100×) | The worst a jammed road can look vs driving it at the limit (the pathfinder's own limit is 256×) | 4× | 10× | 50× |
+| Drivers who re-route while driving | Share of drivers with live navigation (0% = no mid-trip re-routing) | 15% | 30% | 75% |
+| Re-route when the way ahead gets slower by | How much worse the rest of the route must get vs when planned | 50% | 30% | 15% |
 
-**Write traffic summary to log** (off by default) writes a summary to `Logs/LiveTrafficRouting.log` about every 45 game minutes.
+If you were on a preset whose values changed in an update (Eager), the new values are applied automatically.
+
+**For traffic geeks** (both off by default):
+- **Statistics panel**: shows the Live Traffic icon and panel and records statistics (below). Off = nothing is recorded.
+- **Write traffic report to log**: also writes each recorded game hour to `Logs/LiveTrafficRouting.log`.
 
 ## Statistics (with the mod on and off)
 
-The mod measures traffic every game minute, **also when it is set to Off**, so you can compare the game's own routing
-("Native") with live traffic ("Live"). Each game hour is saved as one capture, tagged with the mode, to
+With **Statistics panel** on, the mod measures traffic every game minute, **also when the mod is set to Off**, so you
+can compare the game's own routing ("Native") with live traffic ("Live"). Each game hour is saved as one row,
+tagged with its **run**, to
 `%USERPROFILE%\AppData\LocalLow\Colossal Order\Cities Skylines II\ModsData\LiveTrafficRouting\captures.csv`.
 
 | Metric | Meaning |
@@ -64,27 +69,40 @@ The mod measures traffic every game minute, **also when it is set to Off**, so y
 | Route planner view | Speeds with the mod's penalties, as the route planner sees them (Live only) |
 | Mod processing time | The mod's own jobs, one run timed per game hour |
 
+**Runs**: a run is one continuous recording with the same mode and settings (all slider values are stored). A new
+run starts when you load a save, delete statistics, or change the mod's settings; the game hour in progress is then
+not recorded, so every row belongs to exactly one setup.
+
+The file is read by column name (older files are upgraded once, with a backup). Above 20,000 rows the oldest move to
+`captures-archive-<date>.csv`; deleting keeps a `captures-backup-<date>.csv`. Only the newest 5 of each are kept.
+
 Where to see them:
-- **In game:** the traffic icon in the top-left opens the **Live Traffic** panel: right now, Native vs Live averages
-  for this city (all hours, or **same times of day only**, so a Native night isn't compared with a Live rush hour),
-  a history chart as a **timeline** or **by time of day** (Native and Live side by side per hour), filterable by
-  **All / Native / Live traffic** with a choice of metric, and re-routing.
-  Close the panel to collapse it back to the icon.
-- **Options > Live Traffic Routing > Statistics:** the same key numbers as text.
+- **In game:** the traffic icon in the top-left opens the **Live Traffic** panel (close it to collapse to the icon):
+  - **Now**: the current hour.
+  - **Compare**: pick run **A** and run **B** (default: latest Native vs latest Live) and compare by **same game
+    time** (hour by hour, for the same save played twice), **same times of day**, or **all hours**, with a
+    difference column.
+  - **History**: both runs side by side, **by time of day** or as a **timeline**, for any metric.
+  - **Re-routing**: re-routes, % that found a faster route, time saved, trucks and held-back re-routes, by time of
+    day or as a timeline.
+  - **Runs**: all runs with their settings; delete one run, **all Live runs (keeping the Native baseline)**, or
+    everything for this city.
 - **Log:** with "Write traffic report to log" on, one line per game hour in `Logs/LiveTrafficRouting.log`.
-- **CSV:** open `captures.csv` in a spreadsheet and filter the `mode` column.
+- **CSV:** open `captures.csv` in a spreadsheet and filter the `run_id` or `mode` column.
 
 ### Fair A/B test (recommended)
 
 1. Save your city, and note the game date and time.
-2. Panel > Compare > **Reset statistics for this city** (or Options > Statistics). The old file is kept as a backup.
+2. Options > For traffic geeks > **Statistics panel** on. Optionally Panel > Runs > delete old runs.
 3. Set the mod to **Off**, load the save, and let it run for a couple of game days. Don't build or change roads.
 4. Load **the same save** again, set the mod to **Balanced** (or the preset you want to test), and run for the same game time.
-5. Panel > Compare > **Same game time**: every game hour from the Native run is paired with the same game hour from
-   the Live run (for example 2029-01-08 07:00 in both), and only paired hours are averaged. History > By time of
-   day shows the same comparison per hour of the day.
+5. Panel > Compare > **Same game time**: every game hour of run A is paired with the same game hour of run B (for
+   example 2029-01-08 07:00 in both), and only paired hours are averaged. History > By time of day shows the
+   same comparison per hour of the day.
+6. To test other settings, load the save again with the new settings: it becomes another run. Panel > Runs >
+   **Delete all Live runs** clears the experiments and keeps the Native baseline.
 
-If you replay a game hour in the same mode, the latest recording of that hour counts.
+If a run records the same game hour twice, the latest recording counts.
 
 The mod adds nothing to save files. It can be removed at any time.
 

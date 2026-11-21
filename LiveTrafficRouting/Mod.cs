@@ -16,6 +16,7 @@ namespace LiveTrafficRouting
             Settings = new LiveTrafficSettings(this);
             Settings.RegisterInOptionsUI();
             AssetDatabase.global.LoadSettings(nameof(LiveTrafficRouting), Settings, new LiveTrafficSettings(this));
+            Settings.ReapplyPickedPreset();
             GameManager.instance.localizationManager.AddSource("en-US", new LiveTrafficLocale(Settings));
 
             // Same phase as the vanilla TrafficFlowSystem it replaces.

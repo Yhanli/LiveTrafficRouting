@@ -14,9 +14,12 @@ Cities: Skylines II **code mod** (C#, Unity ECS). Goal: congestion-aware routing
   (webpack output changed from the Mods folder to `build`), and the csproj target `DeployUIModule` copies it into
   the mod folder after the toolchain's deploy (which deletes the folder first). `build.ps1` runs both.
   C# side: `TrafficUISystem` (bindings group `liveTrafficRouting`: `current`, `history`, `averages`, JSON strings).
-- Statistics: `TrafficReportSystem` samples every 1024 frames and records one `TrafficCapture` per game hour
-  (also when the mod is Off: mode "Native"), saved to `ModsData/LiveTrafficRouting/captures.csv`.
-  Options shows the same numbers via getter-only string properties marked `[Colossal.Json.Exclude]`.
+- Statistics (only while the "Statistics panel" setting is on): `TrafficReportSystem` samples every 1024 frames and
+  records one `TrafficCapture` per game hour, tagged with a run (new run on load, delete, or any settings change;
+  the partial hour is dropped), saved to `ModsData/LiveTrafficRouting/captures.csv`. The CSV is read by header name
+  (add columns in `TrafficCapture.Columns`; old files upgrade once with a backup). Size cap 20k rows -> archive.
+  All comparisons are computed in the panel (TypeScript) from the `history` and `runs` bindings.
+- Preset values may change between versions: `ReapplyPickedPreset()` after loading keeps users on their preset.
 
 ## Decompiled game code
 

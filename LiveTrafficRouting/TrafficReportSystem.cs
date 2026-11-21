@@ -155,6 +155,10 @@ namespace LiveTrafficRouting
             public double NavProgress, NavTime, OtherProgress, OtherTime;
             public string Mode = "";
             public string Preset = "";
+            public string RunId = "";
+            public string Settings = "";
+            // Not recorded: the hour started before we were counting (game loaded, settings changed, reset).
+            public bool Partial;
             public float NavSharePct;
         }
 
@@ -185,6 +189,9 @@ namespace LiveTrafficRouting
         private NativeArray<double> m_Stats;
         private JobHandle m_LastJob;
         private bool m_HasPendingSample;
+        private string m_RunId;
+        private string m_RunSettings = "";
+        private string m_RunMode = "";
         private string m_PendingMode = "";
         private string m_PendingPreset = "";
         private float m_PendingSharePct;
@@ -254,6 +261,7 @@ namespace LiveTrafficRouting
             m_HasPendingSample = false;
             m_Hour = new HourAccumulator();
             m_HourKey = DateTime.MinValue;
+            m_RunId = null;
         }
 
         protected override void OnGamePreload(Purpose purpose, GameMode mode)
@@ -264,6 +272,7 @@ namespace LiveTrafficRouting
             m_HasPendingSample = false;
             m_Hour = new HourAccumulator();
             m_HourKey = DateTime.MinValue;
+            m_RunId = null;
             TrafficReportStore.SetCurrent(new TrafficSnapshot());
         }
 
@@ -271,6 +280,21 @@ namespace LiveTrafficRouting
         {
             LiveTrafficSettings settings = Mod.Settings;
             TrafficReportStore.CurrentCity = m_CityConfigurationSystem.cityName ?? "";
+
+            // Statistics are for traffic geeks: when the panel is off, record nothing at all.
+            if (settings != null && !settings.ShowStatistics)
+            {
+                if (m_RunId != null || m_HasPendingSample)
+                {
+                    m_LastJob.Complete();
+                    m_HasPendingSample = false;
+                    m_Hour = new HourAccumulator();
+                    m_HourKey = DateTime.MinValue;
+                    m_RunId = null;
+                    TrafficReportStore.SetCurrent(new TrafficSnapshot());
+                }
+                return;
+            }
 
             // 1. Fold in the sample scheduled last time (it had a whole interval to finish).
             m_LastJob.Complete();
@@ -285,17 +309,32 @@ namespace LiveTrafficRouting
             DateTime hourKey = new DateTime(now.Year, now.Month, now.Day, now.Hour, 0, 0);
             if (hourKey != m_HourKey)
             {
-                if (m_HourKey != DateTime.MinValue && m_Hour.Samples > 0) FinishHour(settings);
-                m_Hour = new HourAccumulator();
+                if (m_HourKey != DateTime.MinValue && m_Hour.Samples > 0 && !m_Hour.Partial) FinishHour(settings);
+                // The first hour after we start counting began before us, so it isn't a full hour.
+                m_Hour = new HourAccumulator { Partial = m_HourKey == DateTime.MinValue };
                 m_HourKey = hourKey;
                 ModTiming.RequestAll();
             }
 
-            // 3. Schedule the next sample.
+            // 3. A new run starts after loading, a reset, or any change of mode or settings. The hour in progress
+            // then mixes two setups, so it is not recorded.
             bool live = settings == null || settings.IsActive;
+            string mode = live ? "Live" : "Native";
+            string runSettings = settings != null ? settings.RunLabel() : "Balanced";
+            if (m_RunId == null || runSettings != m_RunSettings || mode != m_RunMode)
+            {
+                m_RunId = DateTime.Now.ToString("yyyyMMdd-HHmmss", System.Globalization.CultureInfo.InvariantCulture);
+                m_RunSettings = runSettings;
+                m_RunMode = mode;
+                bool partial = m_Hour.Partial || m_Hour.Samples > 0;
+                m_Hour = new HourAccumulator { Partial = partial };
+                Logger.Info($"Statistics: new run {m_RunId} [{runSettings}]");
+            }
+
+            // 4. Schedule the next sample.
             float share = 0.3f, threshold;
             settings?.GetRerouteTuning(out share, out threshold);
-            m_PendingMode = live ? "Live" : "Native";
+            m_PendingMode = mode;
             m_PendingPreset = settings != null ? settings.Awareness.ToString() : "Balanced";
             m_PendingSharePct = share * 100f;
 
@@ -345,8 +384,10 @@ namespace LiveTrafficRouting
         {
             HourAccumulator h = m_Hour;
             double vehicles = m_Stats[0];
-            h.Mode = h.Samples == 0 || h.Mode == m_PendingMode ? m_PendingMode : "Mixed";
+            h.Mode = m_PendingMode;
             h.Preset = m_PendingPreset;
+            h.RunId = m_RunId ?? "";
+            h.Settings = m_RunSettings;
             h.NavSharePct = m_PendingSharePct;
             h.Samples++;
             h.Vehicles += vehicles;
@@ -365,6 +406,8 @@ namespace LiveTrafficRouting
             {
                 Mode = m_PendingMode,
                 Preset = m_PendingPreset,
+                Settings = m_RunSettings,
+                RunId = m_RunId ?? "",
                 GameTime = m_HourKey == DateTime.MinValue ? "" : m_HourKey.ToString("yyyy-MM-dd HH:00"),
                 Vehicles = (int)vehicles,
                 AvgSpeedPct = Pct(m_Stats[1], vehicles),
@@ -407,6 +450,9 @@ namespace LiveTrafficRouting
                 City = TrafficReportStore.CurrentCity,
                 Mode = h.Mode,
                 Preset = h.Preset,
+                RunId = h.RunId,
+                Settings = h.Settings,
+                RerouteHeldBack = (int)m_RerouteStats[5],
                 Samples = h.Samples,
                 Vehicles = (float)(h.Vehicles / h.Samples),
                 AvgSpeedPct = Pct(h.SpeedRatio, h.Vehicles),

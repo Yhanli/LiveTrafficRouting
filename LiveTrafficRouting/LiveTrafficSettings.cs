@@ -20,14 +20,13 @@ namespace LiveTrafficRouting
     /// (unless the values happen to match the preset). The sliders are only greyed out when the mod is Off.
     /// </summary>
     [FileLocation(nameof(LiveTrafficRouting))]
-    [SettingsUIGroupOrder(TrafficGroup, StatsGroup, DebugGroup)]
-    [SettingsUIShowGroupName(StatsGroup)]
+    [SettingsUIGroupOrder(TrafficGroup, DebugGroup)]
+    [SettingsUIShowGroupName(DebugGroup)]
     internal sealed class LiveTrafficSettings : ModSetting
     {
         internal const string GeneralSection = "General";
         internal const string TrafficGroup = "Traffic";
         internal const string DebugGroup = "Debug";
-        internal const string StatsGroup = "Statistics";
 
         private struct Tuning
         {
@@ -51,12 +50,18 @@ namespace LiveTrafficRouting
 
         private static readonly Tuning kRelaxed = new Tuning(50f, 30f, 75f, 4f, 15f, 50f);
         private static readonly Tuning kBalanced = new Tuning(75f, 50f, 100f, 10f, 30f, 30f);
-        private static readonly Tuning kEager = new Tuning(100f, 75f, 150f, 20f, 60f, 20f);
+        // Eager v2: stronger than the first version (penalty 150%, cap 20x, 60% navigation, +20%), which still
+        // felt mild in testing.
+        private static readonly Tuning kEager = new Tuning(100f, 80f, 250f, 50f, 75f, 15f);
 
         private bool m_IsLoadingDefaults;
         private TrafficAwareness m_Awareness;
         private Tuning m_Tuning;
         private bool m_LogStatistics;
+        private bool m_ShowStatistics;
+        // The last preset picked in the dropdown, also while loading. Used to re-apply a preset whose values
+        // changed in a mod update (otherwise the old saved slider values would turn it into "Custom").
+        private TrafficAwareness m_PickedAwareness;
 
         internal LiveTrafficSettings(IMod mod) : base(mod)
         {
@@ -69,6 +74,7 @@ namespace LiveTrafficRouting
             get => m_Awareness;
             set
             {
+                m_PickedAwareness = value;
                 if (m_Awareness == value) return;
                 m_Awareness = value;
                 if (TryGetPreset(value, out Tuning preset)) m_Tuning = preset;
@@ -96,7 +102,7 @@ namespace LiveTrafficRouting
 
         // Multiplies the extra time a jam adds (100% = as measured).
         [SettingsUISection(GeneralSection, TrafficGroup)]
-        [SettingsUISlider(min = 25f, max = 300f, step = 25f, unit = Game.UI.Unit.kPercentage)]
+        [SettingsUISlider(min = 25f, max = 1000f, step = 25f, unit = Game.UI.Unit.kPercentage)]
         [SettingsUIDisableByCondition(typeof(LiveTrafficSettings), nameof(IsOff))]
         public float PenaltyStrength
         {
@@ -104,9 +110,10 @@ namespace LiveTrafficRouting
             set => SetSlider(ref m_Tuning.PenaltyStrength, value);
         }
 
-        // How many times slower than normal a jammed road may look (2x-20x).
+        // How many times slower than normal a jammed road may look (2x-100x). The pathfinder can represent up to
+        // 256x (FlowOffset is a byte); beyond ~50x a jammed road is effectively closed to route planning.
         [SettingsUISection(GeneralSection, TrafficGroup)]
-        [SettingsUISlider(min = 2f, max = 20f, step = 1f)]
+        [SettingsUISlider(min = 2f, max = 100f, step = 1f)]
         [SettingsUICustomFormat(fractionDigits = 0, maxValueWithFraction = 0f, separateThousands = false)]
         [SettingsUIDisableByCondition(typeof(LiveTrafficSettings), nameof(IsOff))]
         public float AvoidanceLimit
@@ -133,90 +140,18 @@ namespace LiveTrafficRouting
             set => SetSlider(ref m_Tuning.RerouteThreshold, value);
         }
 
-        // ---- Statistics (read-only, filled by TrafficReportSystem; measured whether the mod is on or off) ----
-
-        [SettingsUISection(GeneralSection, StatsGroup)]
-        [Colossal.Json.Exclude]
-        public string StatNow
+        [SettingsUISection(GeneralSection, DebugGroup)]
+        public bool ShowStatistics
         {
-            get
+            get => m_ShowStatistics;
+            set
             {
-                TrafficSnapshot c = TrafficReportStore.Current;
-                if (string.IsNullOrEmpty(c.Mode)) return "Waiting for a city to run...";
-                return Inv("{0} | {1} vehicles | real speed {2:0}% of limit | {3:0.0}% queued | {4} jam warnings",
-                    ModeLabel(c.Mode, c.Preset), c.Vehicles, c.AvgSpeedPct, c.QueuedPct, c.JamWarnings);
+                if (m_ShowStatistics == value) return;
+                m_ShowStatistics = value;
+                Save();
             }
         }
 
-        [SettingsUISection(GeneralSection, StatsGroup)]
-        [Colossal.Json.Exclude]
-        public string StatNavigation
-        {
-            get
-            {
-                TrafficSnapshot c = TrafficReportStore.Current;
-                if (string.IsNullOrEmpty(c.Mode)) return "-";
-                return Inv("with navigation ({0:0}%): {1:0.0} km/h | others: {2:0.0} km/h (this hour)",
-                    c.NavSharePct, c.NavProgressKmh, c.OtherProgressKmh);
-            }
-        }
-
-        [SettingsUISection(GeneralSection, StatsGroup)]
-        [Colossal.Json.Exclude]
-        public string StatLastHour
-        {
-            get
-            {
-                TrafficCapture l = TrafficReportStore.Last;
-                if (l == null || l.City != TrafficReportStore.CurrentCity) return "No full game hour recorded yet.";
-                string rr = l.Mode == "Native"
-                    ? "no re-routing (mod off)"
-                    : Inv("{0} re-routes ({1} cars, {2} trucks, {3} taxis), {4:0}% found a faster route",
-                        l.Reroutes, l.RerouteCars, l.RerouteTrucks, l.RerouteTaxis,
-                        l.RerouteBetter + l.RerouteNoBetter > 0 ? 100f * l.RerouteBetter / (l.RerouteBetter + l.RerouteNoBetter) : 0f);
-                return Inv("{0} [{1}]: speed {2:0}%, {3:0.0} jam warnings, flow {4:0}%, {5}",
-                    l.GameTime, ModeLabel(l.Mode, l.Preset), l.AvgSpeedPct, l.JamWarnings, l.FlowPct, rr);
-            }
-        }
-
-        [SettingsUISection(GeneralSection, StatsGroup)]
-        [Colossal.Json.Exclude]
-        public string StatCompare
-        {
-            get
-            {
-                TrafficReportStore.ModeAverage n = TrafficReportStore.Average("Native");
-                TrafficReportStore.ModeAverage l = TrafficReportStore.Average("Live");
-                if (n.Hours == 0 && l.Hours == 0) return "No hours recorded for this city yet.";
-                return Inv("Native ({0} h): speed {1:0}%, {2:0.0}% queued, {3:0.0} jams, flow {4:0}%  ||  " +
-                           "Live ({5} h): speed {6:0}%, {7:0.0}% queued, {8:0.0} jams, flow {9:0}%",
-                    n.Hours, n.Speed, n.Queued, n.Jams, n.Flow, l.Hours, l.Speed, l.Queued, l.Jams, l.Flow);
-            }
-        }
-
-        [SettingsUISection(GeneralSection, StatsGroup)]
-        [Colossal.Json.Exclude]
-        public string StatModCost
-        {
-            get
-            {
-                float ms = TrafficReportStore.Current.ModMs;
-                return ms < 0 ? "not measured yet (measured once per game hour)" : Inv("{0:0.00} ms per run (one run about every second of game time)", ms);
-            }
-        }
-
-        [SettingsUISection(GeneralSection, StatsGroup)]
-        [SettingsUIButton]
-        [SettingsUIConfirmation]
-        public bool ResetStatistics
-        {
-            set => StatisticsReset.ResetCurrentCity();
-        }
-
-        private static string ModeLabel(string mode, string preset) =>
-            mode == "Live" ? "Live traffic (" + preset + ")" : mode == "Native" ? "Native (mod off)" : "Mixed";
-
-        private static string Inv(string format, params object[] args) => string.Format(CultureInfo.InvariantCulture, format, args);
 
         [SettingsUISection(GeneralSection, DebugGroup)]
         public bool LogStatistics
@@ -243,6 +178,29 @@ namespace LiveTrafficRouting
 
         public bool IsOff() => m_Awareness == TrafficAwareness.Off;
 
+        /// <summary>Describes the active setup, for statistics runs: a run = one setup.</summary>
+        internal string RunLabel()
+        {
+            if (m_Awareness == TrafficAwareness.Off) return "Native (mod off)";
+            Tuning t = m_Tuning;
+            return string.Format(CultureInfo.InvariantCulture,
+                "{0}: live {1:0}%, react {2:0}%, penalty {3:0}%, cap {4:0}x, nav {5:0}%, re-route at +{6:0}%",
+                m_Awareness, t.LiveTrust, t.ReactionSpeed, t.PenaltyStrength, t.AvoidanceLimit, t.RerouteShare, t.RerouteThreshold);
+        }
+
+        /// <summary>
+        /// After loading: if a preset was picked, use its current values. A mod update can change a preset's values;
+        /// the saved slider values are the old ones and would otherwise switch the dropdown to Custom.
+        /// </summary>
+        internal void ReapplyPickedPreset()
+        {
+            if (!TryGetPreset(m_PickedAwareness, out Tuning preset)) return;
+            if (m_Awareness == m_PickedAwareness && Matches(m_Tuning, preset)) return;
+            m_Awareness = m_PickedAwareness;
+            m_Tuning = preset;
+            Save();
+        }
+
         internal bool IsActive => m_Awareness != TrafficAwareness.Off;
 
         /// <summary>Route-cost tuning used by the traffic system.</summary>
@@ -267,6 +225,8 @@ namespace LiveTrafficRouting
             m_Awareness = TrafficAwareness.Balanced;
             m_Tuning = kBalanced;
             m_LogStatistics = false;
+            m_ShowStatistics = false;
+            m_PickedAwareness = TrafficAwareness.Balanced;
             m_IsLoadingDefaults = false;
         }
 
