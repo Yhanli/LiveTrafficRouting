@@ -24,6 +24,11 @@ interface Capture {
     local: number; jams: number; jamsMax: number; flow: number; navKmh: number; otherKmh: number; navShare: number;
     rr: number; rrCars: number; rrTrucks: number; rrTaxis: number; rrBetter: number; rrNoBetter: number;
     rrSaved: number; rrHeld: number; planSpeed: number; planJammed: number; ms: number;
+    // Destinations (-1 = hour recorded before these were measured)
+    cCom: number; cHome: number; cShop: number; cLeis: number; cOth: number;
+    qCom: number; qHome: number; qShop: number; qLeis: number; qOth: number;
+    sTrips: number; sPlaces: number; sTop5: number; sKm: number;
+    lTrips: number; lPlaces: number; lTop5: number; lKm: number;
 }
 interface Hotspot { p: string; k: string; q: number; j: number; h: number; }
 interface Run { id: string; mode: string; preset: string; settings: string; first: string; last: string; hours: number; pinned?: number; baseline?: number; }
@@ -242,7 +247,11 @@ function seriesFor(a: Capture[], b: Capture[], scope: Scope, m: Metric): { xs: n
 
 /** Paired t-test on the differences, or Welch's t-test for two independent series. */
 function significance(a: Capture[], b: Capture[], scope: Scope, m: Metric): Significance {
-    const { xs, ys, paired, consecutive } = seriesFor(a, b, scope, m);
+    return significanceOf(seriesFor(a, b, scope, m));
+}
+
+function significanceOf(series: { xs: number[]; ys: number[]; paired: boolean; consecutive: boolean }): Significance {
+    const { xs, ys, paired, consecutive } = series;
     if (paired) {
         const d = xs.map((x, i) => ys[i] - x);
         const n = d.length;
@@ -363,7 +372,63 @@ function modeLabel(mode?: string, preset?: string): string {
 // ---------------------------------------------------------------------------------------------
 // Panel
 // ---------------------------------------------------------------------------------------------
-type Tab = "Now" | "Compare" | "History" | "Hotspots" | "Rerouting" | "Runs";
+type Tab = "Now" | "Compare" | "History" | "Hotspots" | "Destinations" | "Rerouting" | "Runs";
+
+/** A destination metric: value of one game hour, or null when that hour has no such data. */
+interface DestMetric { label: string; unit: string; digits: number; higherIsBetter: boolean; get: (c: Capture) => number | null; }
+const field = (k: keyof Capture) => (c: Capture) => (typeof c[k] === "number" && (c[k] as number) >= 0 ? (c[k] as number) : null);
+const QUEUED_PURPOSE: DestMetric[] = [
+    { label: "Commuting", unit: "%", digits: 0, higherIsBetter: false, get: field("qCom") },
+    { label: "Going home", unit: "%", digits: 0, higherIsBetter: false, get: field("qHome") },
+    { label: "Shopping", unit: "%", digits: 0, higherIsBetter: false, get: field("qShop") },
+    { label: "Leisure", unit: "%", digits: 0, higherIsBetter: false, get: field("qLeis") },
+    { label: "Other", unit: "%", digits: 0, higherIsBetter: false, get: field("qOth") },
+];
+const SHOP_METRICS: DestMetric[] = [
+    { label: "Trips per hour", unit: "", digits: 0, higherIsBetter: true, get: field("sTrips") },
+    { label: "Different shops used", unit: "", digits: 0, higherIsBetter: true, get: field("sPlaces") },
+    { label: "Trips to the 5 busiest", unit: "%", digits: 0, higherIsBetter: false, get: field("sTop5") },
+    { label: "Distance from home", unit: " km", digits: 2, higherIsBetter: false, get: field("sKm") },
+];
+const LEISURE_METRICS: DestMetric[] = [
+    { label: "Trips per hour", unit: "", digits: 0, higherIsBetter: true, get: field("lTrips") },
+    { label: "Different places used", unit: "", digits: 0, higherIsBetter: true, get: field("lPlaces") },
+    { label: "Trips to the 5 busiest", unit: "%", digits: 0, higherIsBetter: false, get: field("lTop5") },
+    { label: "Distance from home", unit: " km", digits: 2, higherIsBetter: false, get: field("lKm") },
+];
+
+/** Like seriesFor, for destination metrics (which skip hours without data). */
+function destSeries(a: Capture[], b: Capture[], scope: Scope, m: DestMetric) {
+    const xs: number[] = [];
+    const ys: number[] = [];
+    if (scope === "Paired") {
+        const ma = byTime(a);
+        const mb = byTime(b);
+        Array.from(ma.keys()).sort().forEach(t => {
+            const cb = mb.get(t);
+            if (!cb) return;
+            const va = m.get(ma.get(t)!);
+            const vb = m.get(cb);
+            if (va !== null && vb !== null) { xs.push(va); ys.push(vb); }
+        });
+        return { xs, ys, paired: true, consecutive: true };
+    }
+    if (scope === "SameHours") {
+        const hourMean = (list: Capture[], h: number) => {
+            const v = list.filter(c => c.h === h).map(m.get).filter((x): x is number => x !== null);
+            return v.length > 0 ? v.reduce((p, q) => p + q, 0) / v.length : null;
+        };
+        for (let h = 0; h < 24; h++) {
+            const va = hourMean(a, h);
+            const vb = hourMean(b, h);
+            if (va !== null && vb !== null) { xs.push(va); ys.push(vb); }
+        }
+        return { xs, ys, paired: true, consecutive: false };
+    }
+    for (const c of a) { const v = m.get(c); if (v !== null) xs.push(v); }
+    for (const c of b) { const v = m.get(c); if (v !== null) ys.push(v); }
+    return { xs, ys, paired: false, consecutive: true };
+}
 type View = "Timeline" | "TimeOfDay";
 const MAX_SLOTS = 48;
 
@@ -495,7 +560,7 @@ export const LiveTrafficPanel = () => {
                 <Panel header="Live Traffic" className={styles.panel} onClose={() => setExpanded(false)}>
                     <div className={styles.body}>
                         <div className={styles.tabs}>
-                            {(["Now", "Compare", "History", "Hotspots", "Rerouting", "Runs"] as Tab[]).map(t => (
+                            {(["Now", "Compare", "History", "Hotspots", "Destinations", "Rerouting", "Runs"] as Tab[]).map(t => (
                                 <div key={t} className={tab === t ? `${styles.tab} ${styles.tabOn}` : styles.tab} onClick={() => switchTab(t)}>
                                     {t === "Rerouting" ? "Re-routing" : t}
                                 </div>
@@ -649,6 +714,70 @@ export const LiveTrafficPanel = () => {
                                             })}
                                         </div>
                                         <div className={styles.note}>S = street, J = junction. A place that wasn't among the busiest in an hour counts as 0 for that hour. Streets with the same name are counted together.</div>
+                                    </>);
+                                })()}
+                            </>)}
+                        </>)}
+
+                        {tab === "Destinations" && (<>
+                            {runs.length < 2 ? <div className={styles.empty}>{"Record at least two runs (for example Native and Live from the same save) to compare destinations."}</div> : (<>
+                                {pickers}
+                                <div className={styles.toggles}>
+                                    <Toggle label="Same game time" selected={scope === "Paired"} onClick={() => setScope("Paired")} />
+                                    <Toggle label="Same times of day" selected={scope === "SameHours"} onClick={() => setScope("SameHours")} />
+                                    <Toggle label="All hours" selected={scope === "AllHours"} onClick={() => setScope("AllHours")} />
+                                </div>
+                                {(() => {
+                                    const table = (title: string, metrics: DestMetric[]) => (
+                                        <>
+                                            <div className={styles.sectionTitle}>{title}</div>
+                                            <div className={styles.table}>
+                                                <div className={styles.tableRow}>
+                                                    <div className={styles.tableLabel}></div>
+                                                    <div className={`${styles.tableHead} ${styles.colorA}`}>{nameA}</div>
+                                                    <div className={`${styles.tableHead} ${styles.colorB}`}>{nameB}</div>
+                                                    <div className={styles.tableHeadWide}>B vs A</div>
+                                                    <div className={styles.tableHeadSig}>Real?</div>
+                                                </div>
+                                                {metrics.map(dm => {
+                                                    const ser = destSeries(capsA, capsB, scope, dm);
+                                                    const mean = (v: number[]) => (v.length > 0 ? v.reduce((p, q) => p + q, 0) / v.length : null);
+                                                    const va = mean(ser.xs);
+                                                    const vb = mean(ser.ys);
+                                                    const m: Metric = { key: dm.label, label: dm.label, unit: dm.unit, digits: dm.digits, higherIsBetter: dm.higherIsBetter, value: () => 0 };
+                                                    const d = fmtDiff(va, vb, m);
+                                                    const sig = significanceOf(ser);
+                                                    return (
+                                                        <div className={styles.tableRow} key={title + dm.label}>
+                                                            <div className={styles.tableLabel}>{dm.label}</div>
+                                                            <div className={styles.tableCell}>{fmt(va, dm.digits, dm.unit)}</div>
+                                                            <div className={styles.tableCell}>{fmt(vb, dm.digits, dm.unit)}</div>
+                                                            <div className={`${styles.tableCellWide} ${sig.verdict === "noise" ? "" : d.cls}`}>{d.text}</div>
+                                                            <div className={styles.tableCellSig}>
+                                                                {sig.verdict !== "n/a" && <span className={styles[`sig_${sig.verdict}`]}>{VERDICT_TEXT[sig.verdict]}</span>}
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </>
+                                    );
+                                    // The number that decides whether "change destination mid-trip" is worth building.
+                                    const shareOf = (caps: Capture[], k: keyof Capture) => {
+                                        const v = caps.map(field(k)).filter((x): x is number => x !== null);
+                                        return v.length > 0 ? v.reduce((p, q) => p + q, 0) / v.length : null;
+                                    };
+                                    const live = runB?.mode === "Live" ? capsB : runA?.mode === "Live" ? capsA : capsB;
+                                    const leis = shareOf(live, "qLeis");
+                                    const shop = shareOf(live, "qShop");
+                                    return (<>
+                                        <div className={styles.note}>{leis === null
+                                            ? "These numbers are recorded from this version on. Record a Native and a Live run from the same save to compare."
+                                            : `Of the cars waiting in queues, ${fmt(leis, 0, "%")} are on leisure trips and ${fmt(shop, 0, "%")} on shopping trips. Only leisure trips could switch destination mid-trip (shopping is paid when the trip is planned), so that share is the most such a feature could help.`}</div>
+                                        {table("Why queued cars are on the road (% of queued cars)", QUEUED_PURPOSE)}
+                                        {table("Shopping trips (all travel modes, per game hour)", SHOP_METRICS)}
+                                        {table("Leisure trips (all travel modes, per game hour)", LEISURE_METRICS)}
+                                        <div className={styles.note}>{"If live traffic makes people pick other places, a Live run uses more different places, sends fewer trips to the 5 busiest, at a similar distance from home."}</div>
                                     </>);
                                 })()}
                             </>)}

@@ -28,6 +28,12 @@ using Aggregated = Game.Net.Aggregated;
 using Aggregate = Game.Net.Aggregate;
 using NetNode = Game.Net.Node;
 using ConnectedEdge = Game.Net.ConnectedEdge;
+using Passenger = Game.Vehicles.Passenger;
+using Resident = Game.Creatures.Resident;
+using TravelPurpose = Game.Citizens.TravelPurpose;
+using TripPurpose = Game.Citizens.Purpose;
+using HouseholdMember = Game.Citizens.HouseholdMember;
+using PropertyRenter = Game.Buildings.PropertyRenter;
 
 namespace LiveTrafficRouting
 {
@@ -45,8 +51,42 @@ namespace LiveTrafficRouting
         private const float kFramesPerSecond = 60f;
 
         // Per-sample counters: [0] vehicles, [1] sum speed/limit, [2] queued, [3] on local streets,
-        // [4] nav progress (m), [5] nav time (s), [6] other progress (m), [7] other time (s), [8] jam warnings shown
-        private const int kSampleStats = 9;
+        // [4] nav progress (m), [5] nav time (s), [6] other progress (m), [7] other time (s), [8] jam warnings shown,
+        // [9..13] personal cars on the road by trip purpose, [14..18] the same for queued personal cars
+        //   (purpose order: commute, home, shopping, leisure, other),
+        // [19] shopping trips started, [20] their home->destination distance sum (m), [21] trips with a known home,
+        // [22] leisure trips started, [23] distance sum (m), [24] trips with a known home
+        private const int kSampleStats = 25;
+        private const int kPurposeAll = 9;
+        private const int kPurposeQueued = 14;
+        private const int kPurposeCount = 5;
+        private const int kShop = 19;
+        private const int kLeisure = 22;
+
+        /// <summary>Trip purpose groups: 0 commute, 1 going home, 2 shopping, 3 leisure, 4 other/unknown.</summary>
+        private static int PurposeGroup(TripPurpose purpose)
+        {
+            switch (purpose)
+            {
+                case TripPurpose.GoingToWork:
+                case TripPurpose.GoingToSchool:
+                case TripPurpose.Working:
+                case TripPurpose.Studying:
+                    return 0;
+                case TripPurpose.GoingHome:
+                    return 1;
+                case TripPurpose.Shopping:
+                    return 2;
+                case TripPurpose.Leisure:
+                case TripPurpose.Relaxing:
+                case TripPurpose.Sightseeing:
+                case TripPurpose.VisitAttractions:
+                case TripPurpose.Traveling:
+                    return 3;
+                default:
+                    return 4;
+            }
+        }
 
         private struct TripState
         {
@@ -86,6 +126,9 @@ namespace LiveTrafficRouting
             [ReadOnly] public ComponentTypeHandle<Taxi> m_TaxiType;
             [ReadOnly] public ComponentLookup<CarLane> m_CarLaneData;
             [ReadOnly] public ComponentLookup<Transform> m_TransformData;
+            [ReadOnly] public BufferLookup<Passenger> m_PassengerData;
+            [ReadOnly] public ComponentLookup<Resident> m_ResidentData;
+            [ReadOnly] public ComponentLookup<TravelPurpose> m_PurposeData;
 
             public NativeParallelHashMap<Entity, TripState> m_Trips;
             public NativeArray<double> m_Stats;
@@ -100,7 +143,8 @@ namespace LiveTrafficRouting
                 NativeArray<Transform> transforms = chunk.GetNativeArray(ref m_TransformType);
                 NativeArray<Blocker> blockers = chunk.GetNativeArray(ref m_BlockerType);
                 NativeArray<Target> targets = chunk.GetNativeArray(ref m_TargetType);
-                bool covered = chunk.Has(ref m_PersonalCarType) || chunk.Has(ref m_DeliveryTruckType) || chunk.Has(ref m_TaxiType);
+                bool personal = chunk.Has(ref m_PersonalCarType);
+                bool covered = personal || chunk.Has(ref m_DeliveryTruckType) || chunk.Has(ref m_TaxiType);
 
                 for (int i = 0; i < entities.Length; i++)
                 {
@@ -109,10 +153,36 @@ namespace LiveTrafficRouting
                     float speed = math.length(movings[i].m_Velocity);
                     m_Stats[0] += 1;
                     m_Stats[1] += math.saturate(speed / math.max(1f, lane.m_SpeedLimit));
+                    bool queued = false;
                     if (blockers.Length != 0)
                     {
-                        Blocker blocker = blockers[i];
-                        if (blocker.m_Type == BlockerType.Continuing && blocker.m_Blocker != Entity.Null && speed < 1f)
+                        Blocker b = blockers[i];
+                        queued = b.m_Type == BlockerType.Continuing && b.m_Blocker != Entity.Null && speed < 1f;
+                    }
+
+                    // Why is this car on the road? The trip purpose of its first passenger with one.
+                    if (personal)
+                    {
+                        int group = 4;
+                        if (m_PassengerData.TryGetBuffer(entities[i], out DynamicBuffer<Passenger> passengers))
+                        {
+                            for (int k = 0; k < passengers.Length; k++)
+                            {
+                                if (m_ResidentData.TryGetComponent(passengers[k].m_Passenger, out Resident resident) &&
+                                    m_PurposeData.TryGetComponent(resident.m_Citizen, out TravelPurpose purpose))
+                                {
+                                    group = PurposeGroup(purpose.m_Purpose);
+                                    break;
+                                }
+                            }
+                        }
+                        m_Stats[kPurposeAll + group] += 1;
+                        if (queued) m_Stats[kPurposeQueued + group] += 1;
+                    }
+
+                    if (blockers.Length != 0)
+                    {
+                        if (queued)
                         {
                             m_Stats[2] += 1;
                             Entity place = PlaceOf(lanes[i].m_Lane, ref m_OwnerData, ref m_AggregatedData);
@@ -143,6 +213,87 @@ namespace LiveTrafficRouting
                     }
                     m_Trips[vehicle] = new TripState { m_Target = target, m_Distance = distance, m_Frame = m_Frame };
                 }
+            }
+        }
+
+        private struct SeenTrip
+        {
+            public Entity m_Target;
+            public uint m_Frame;
+        }
+
+        /// <summary>
+        /// Shopping and leisure trips: which place they go to (each trip counted once, when first seen) and how far that
+        /// is from home. Includes walkers and public transport riders: destination choice is not only a car thing.
+        /// </summary>
+        [BurstCompile]
+        private struct TripDestinationsJob : IJobChunk
+        {
+            [ReadOnly] public EntityTypeHandle m_EntityType;
+            [ReadOnly] public ComponentTypeHandle<Resident> m_ResidentType;
+            [ReadOnly] public ComponentTypeHandle<Target> m_TargetType;
+            [ReadOnly] public ComponentLookup<TravelPurpose> m_PurposeData;
+            [ReadOnly] public ComponentLookup<HouseholdMember> m_HouseholdMemberData;
+            [ReadOnly] public ComponentLookup<PropertyRenter> m_PropertyRenterData;
+            [ReadOnly] public ComponentLookup<Transform> m_TransformData;
+            public NativeParallelHashMap<Entity, SeenTrip> m_Seen;
+            public NativeParallelHashMap<Entity, int> m_ShopPlaces;
+            public NativeParallelHashMap<Entity, int> m_LeisurePlaces;
+            public NativeArray<double> m_Stats;
+            public uint m_Frame;
+
+            public void Execute(in ArchetypeChunk chunk, int unfilteredChunkIndex, bool useEnabledMask, in v128 chunkEnabledMask)
+            {
+                NativeArray<Entity> entities = chunk.GetNativeArray(m_EntityType);
+                NativeArray<Resident> residents = chunk.GetNativeArray(ref m_ResidentType);
+                NativeArray<Target> targets = chunk.GetNativeArray(ref m_TargetType);
+                for (int i = 0; i < entities.Length; i++)
+                {
+                    Entity destination = targets[i].m_Target;
+                    if (destination == Entity.Null) continue;
+                    Entity citizen = residents[i].m_Citizen;
+                    if (!m_PurposeData.TryGetComponent(citizen, out TravelPurpose purpose)) continue;
+                    int group = PurposeGroup(purpose.m_Purpose);
+                    if (group != 2 && group != 3) continue;
+
+                    // Count each trip once: a new trip = first time seen, or a new destination.
+                    Entity creature = entities[i];
+                    bool counted = m_Seen.TryGetValue(creature, out SeenTrip seen) && seen.m_Target == destination;
+                    m_Seen[creature] = new SeenTrip { m_Target = destination, m_Frame = m_Frame };
+                    if (counted) continue;
+
+                    int slot = group == 2 ? kShop : kLeisure;
+                    NativeParallelHashMap<Entity, int> places = group == 2 ? m_ShopPlaces : m_LeisurePlaces;
+                    m_Stats[slot] += 1;
+                    places.TryGetValue(destination, out int n);
+                    places[destination] = n + 1;
+
+                    if (m_HouseholdMemberData.TryGetComponent(citizen, out HouseholdMember member) &&
+                        m_PropertyRenterData.TryGetComponent(member.m_Household, out PropertyRenter home) &&
+                        m_TransformData.TryGetComponent(home.m_Property, out Transform homeTransform) &&
+                        m_TransformData.TryGetComponent(destination, out Transform destTransform))
+                    {
+                        m_Stats[slot + 1] += math.distance(homeTransform.m_Position.xz, destTransform.m_Position.xz);
+                        m_Stats[slot + 2] += 1;
+                    }
+                }
+            }
+        }
+
+        [BurstCompile]
+        private struct PruneSeenJob : IJob
+        {
+            public NativeParallelHashMap<Entity, SeenTrip> m_Seen;
+            public uint m_Frame;
+
+            public void Execute()
+            {
+                NativeArray<Entity> keys = m_Seen.GetKeyArray(Allocator.Temp);
+                for (int i = 0; i < keys.Length; i++)
+                {
+                    if (m_Frame - m_Seen[keys[i]].m_Frame > kMaxSampleGap) m_Seen.Remove(keys[i]);
+                }
+                keys.Dispose();
             }
         }
 
@@ -207,6 +358,10 @@ namespace LiveTrafficRouting
             public bool Partial;
             // Per place (street or junction): queued vehicles and jam warnings, summed over the samples.
             public readonly Dictionary<Entity, float2> Places = new Dictionary<Entity, float2>();
+            // Trip purpose counts and destination statistics (stat slots 9-24), and trips per destination.
+            public readonly double[] Sums = new double[kSampleStats];
+            public readonly Dictionary<Entity, int> ShopPlaces = new Dictionary<Entity, int>();
+            public readonly Dictionary<Entity, int> LeisurePlaces = new Dictionary<Entity, int>();
             public float NavSharePct;
         }
 
@@ -235,6 +390,16 @@ namespace LiveTrafficRouting
 
         private NativeParallelHashMap<Entity, TripState> m_Trips;
         private NativeParallelHashMap<Entity, int> m_PlaceQueued;
+        private NativeParallelHashMap<Entity, SeenTrip> m_SeenTrips;
+        private NativeParallelHashMap<Entity, int> m_ShopPlaces;
+        private NativeParallelHashMap<Entity, int> m_LeisurePlaces;
+        private EntityQuery m_ResidentQuery;
+        private ComponentTypeHandle<Resident> m_ResidentType;
+        private BufferLookup<Passenger> m_PassengerData;
+        private ComponentLookup<Resident> m_ResidentData;
+        private ComponentLookup<TravelPurpose> m_PurposeData;
+        private ComponentLookup<HouseholdMember> m_HouseholdMemberData;
+        private ComponentLookup<PropertyRenter> m_PropertyRenterData;
         private NativeParallelHashMap<Entity, int> m_PlaceJams;
         private ComponentLookup<Owner> m_OwnerData;
         private ComponentLookup<Aggregated> m_AggregatedData;
@@ -298,6 +463,17 @@ namespace LiveTrafficRouting
 
             m_Trips = new NativeParallelHashMap<Entity, TripState>(16384, Allocator.Persistent);
             m_PlaceQueued = new NativeParallelHashMap<Entity, int>(1024, Allocator.Persistent);
+            m_SeenTrips = new NativeParallelHashMap<Entity, SeenTrip>(8192, Allocator.Persistent);
+            m_ShopPlaces = new NativeParallelHashMap<Entity, int>(512, Allocator.Persistent);
+            m_LeisurePlaces = new NativeParallelHashMap<Entity, int>(512, Allocator.Persistent);
+            m_ResidentQuery = GetEntityQuery(ComponentType.ReadOnly<Resident>(), ComponentType.ReadOnly<Target>(),
+                ComponentType.Exclude<Deleted>(), ComponentType.Exclude<Temp>());
+            m_ResidentType = GetComponentTypeHandle<Resident>(true);
+            m_PassengerData = GetBufferLookup<Passenger>(true);
+            m_ResidentData = GetComponentLookup<Resident>(true);
+            m_PurposeData = GetComponentLookup<TravelPurpose>(true);
+            m_HouseholdMemberData = GetComponentLookup<HouseholdMember>(true);
+            m_PropertyRenterData = GetComponentLookup<PropertyRenter>(true);
             m_PlaceJams = new NativeParallelHashMap<Entity, int>(256, Allocator.Persistent);
             m_OwnerData = GetComponentLookup<Owner>(true);
             m_AggregatedData = GetComponentLookup<Aggregated>(true);
@@ -310,6 +486,9 @@ namespace LiveTrafficRouting
             m_LastJob.Complete();
             m_Trips.Dispose();
             m_PlaceQueued.Dispose();
+            m_SeenTrips.Dispose();
+            m_ShopPlaces.Dispose();
+            m_LeisurePlaces.Dispose();
             m_PlaceJams.Dispose();
             m_Stats.Dispose();
             base.OnDestroy();
@@ -330,6 +509,7 @@ namespace LiveTrafficRouting
             base.OnGamePreload(purpose, mode);
             m_LastJob.Complete();
             m_Trips.Clear();
+            m_SeenTrips.Clear();
             m_HasPendingSample = false;
             m_Hour = new HourAccumulator();
             m_HourKey = DateTime.MinValue;
@@ -420,6 +600,14 @@ namespace LiveTrafficRouting
             m_AggregatedData.Update(this);
             m_PlaceQueued.Clear();
             m_PlaceJams.Clear();
+            m_ShopPlaces.Clear();
+            m_LeisurePlaces.Clear();
+            m_ResidentType.Update(this);
+            m_PassengerData.Update(this);
+            m_ResidentData.Update(this);
+            m_PurposeData.Update(this);
+            m_HouseholdMemberData.Update(this);
+            m_PropertyRenterData.Update(this);
 
             uint frame = m_SimulationSystem.frameIndex;
             JobHandle handle = new PruneTripsJob { m_Trips = m_Trips, m_Frame = frame }.Schedule(Dependency);
@@ -448,11 +636,31 @@ namespace LiveTrafficRouting
                 m_OwnerData = m_OwnerData,
                 m_AggregatedData = m_AggregatedData,
                 m_PlaceQueued = m_PlaceQueued,
+                m_PassengerData = m_PassengerData,
+                m_ResidentData = m_ResidentData,
+                m_PurposeData = m_PurposeData,
                 m_Trips = m_Trips,
                 m_Stats = m_Stats,
                 m_Frame = frame,
                 m_SharePercent = NavigationGroup.SharePercent(share),
             }.Schedule(m_VehicleQuery, handle);
+
+            handle = new PruneSeenJob { m_Seen = m_SeenTrips, m_Frame = frame }.Schedule(handle);
+            handle = new TripDestinationsJob
+            {
+                m_EntityType = m_EntityType,
+                m_ResidentType = m_ResidentType,
+                m_TargetType = m_TargetType,
+                m_PurposeData = m_PurposeData,
+                m_HouseholdMemberData = m_HouseholdMemberData,
+                m_PropertyRenterData = m_PropertyRenterData,
+                m_TransformData = m_TransformData,
+                m_Seen = m_SeenTrips,
+                m_ShopPlaces = m_ShopPlaces,
+                m_LeisurePlaces = m_LeisurePlaces,
+                m_Stats = m_Stats,
+                m_Frame = frame,
+            }.Schedule(m_ResidentQuery, handle);
 
             m_LastJob = handle;
             Dependency = handle;
@@ -463,6 +671,9 @@ namespace LiveTrafficRouting
         {
             AddPlaces(m_PlaceQueued, 0);
             AddPlaces(m_PlaceJams, 1);
+            for (int i = kPurposeAll; i < kSampleStats; i++) m_Hour.Sums[i] += m_Stats[i];
+            AddCounts(m_ShopPlaces, m_Hour.ShopPlaces);
+            AddCounts(m_LeisurePlaces, m_Hour.LeisurePlaces);
             HourAccumulator h = m_Hour;
             double vehicles = m_Stats[0];
             h.Mode = m_PendingMode;
@@ -500,6 +711,32 @@ namespace LiveTrafficRouting
                 NavSharePct = m_PendingSharePct,
                 ModMs = LastModMs(),
             });
+        }
+
+        private static void AddCounts(NativeParallelHashMap<Entity, int> map, Dictionary<Entity, int> into)
+        {
+            if (map.IsEmpty) return;
+            NativeKeyValueArrays<Entity, int> kv = map.GetKeyValueArrays(Allocator.Temp);
+            for (int i = 0; i < kv.Length; i++)
+            {
+                into.TryGetValue(kv.Keys[i], out int n);
+                into[kv.Keys[i]] = n + kv.Values[i];
+            }
+            kv.Dispose();
+        }
+
+        /// <summary>Share of trips that went to the 5 most visited places (how concentrated the choice is).</summary>
+        private static float Top5Share(Dictionary<Entity, int> places, double trips)
+        {
+            if (trips <= 0 || places.Count == 0) return 0f;
+            return (float)(places.Values.OrderByDescending(v => v).Take(5).Sum() / trips * 100.0);
+        }
+
+        private static float PurposePct(double[] sums, int start, int group)
+        {
+            double total = 0;
+            for (int i = 0; i < kPurposeCount; i++) total += sums[start + i];
+            return total > 0 ? (float)(sums[start + group] / total * 100.0) : 0f;
         }
 
         private void AddPlaces(NativeParallelHashMap<Entity, int> map, int component)
@@ -620,6 +857,24 @@ namespace LiveTrafficRouting
                 RunId = h.RunId,
                 Settings = h.Settings,
                 RerouteHeldBack = (int)m_RerouteStats[5],
+                CarCommutePct = PurposePct(h.Sums, kPurposeAll, 0),
+                CarHomePct = PurposePct(h.Sums, kPurposeAll, 1),
+                CarShopPct = PurposePct(h.Sums, kPurposeAll, 2),
+                CarLeisurePct = PurposePct(h.Sums, kPurposeAll, 3),
+                CarOtherPct = PurposePct(h.Sums, kPurposeAll, 4),
+                QueuedCommutePct = PurposePct(h.Sums, kPurposeQueued, 0),
+                QueuedHomePct = PurposePct(h.Sums, kPurposeQueued, 1),
+                QueuedShopPct = PurposePct(h.Sums, kPurposeQueued, 2),
+                QueuedLeisurePct = PurposePct(h.Sums, kPurposeQueued, 3),
+                QueuedOtherPct = PurposePct(h.Sums, kPurposeQueued, 4),
+                ShopTrips = (int)h.Sums[kShop],
+                ShopPlaces = h.ShopPlaces.Count,
+                ShopTop5Pct = Top5Share(h.ShopPlaces, h.Sums[kShop]),
+                ShopKm = h.Sums[kShop + 2] > 0 ? (float)(h.Sums[kShop + 1] / h.Sums[kShop + 2] / 1000.0) : 0f,
+                LeisureTrips = (int)h.Sums[kLeisure],
+                LeisurePlaces = h.LeisurePlaces.Count,
+                LeisureTop5Pct = Top5Share(h.LeisurePlaces, h.Sums[kLeisure]),
+                LeisureKm = h.Sums[kLeisure + 2] > 0 ? (float)(h.Sums[kLeisure + 1] / h.Sums[kLeisure + 2] / 1000.0) : 0f,
                 Samples = h.Samples,
                 Vehicles = (float)(h.Vehicles / h.Samples),
                 AvgSpeedPct = Pct(h.SpeedRatio, h.Vehicles),

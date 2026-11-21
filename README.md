@@ -94,6 +94,10 @@ Where to see them:
   - **History**: both runs side by side, **by time of day** or as a **timeline**, for any metric.
   - **Hotspots**: the streets and junctions with the most vehicles waiting in queues (and jam warnings), run A vs
     run B. Recorded per game hour (top 15 places) to `hotspots.csv`.
+  - **Destinations**: why queued cars are on the road (commuting, going home, shopping, leisure, other), and for
+    shopping and leisure trips (all travel modes): trips per hour, how many different places are used, % of trips to
+    the 5 busiest places, and distance from home. Shows whether live traffic makes people pick other places, and how
+    much a "change destination mid-trip" feature (leisure only) could help at most.
   - **Re-routing**: re-routes, % that found a faster route, time saved, trucks and held-back re-routes, by time of
     day or as a timeline.
   - **Runs**: all runs with their settings; delete one run, **all Live runs (keeping the Native baseline)**, or

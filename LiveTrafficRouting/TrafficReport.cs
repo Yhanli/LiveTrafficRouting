@@ -42,6 +42,14 @@ namespace LiveTrafficRouting
 
         public float ModMs;                // our own jobs, one timed run (flow + re-route)
 
+        // Why personal cars are on the road / in queues: % by trip purpose of the passengers.
+        public float CarCommutePct, CarHomePct, CarShopPct, CarLeisurePct, CarOtherPct;
+        public float QueuedCommutePct, QueuedHomePct, QueuedShopPct, QueuedLeisurePct, QueuedOtherPct;
+        // Shopping / leisure trips started this hour (all travel modes): how many, to how many different places,
+        // % that went to the 5 most visited places, average straight-line distance from home (km).
+        public int ShopTrips, ShopPlaces, LeisureTrips, LeisurePlaces;
+        public float ShopTop5Pct, ShopKm, LeisureTop5Pct, LeisureKm;
+
         // ---- CSV: columns are matched by header name, so files from older versions still load ----
 
         private delegate string Getter(TrafficCapture c);
@@ -89,6 +97,24 @@ namespace LiveTrafficRouting
             new Column("planner_speed_pct", c => F(c.PlannerSpeedPct), (c, v) => c.PlannerSpeedPct = P(v)),
             new Column("planner_jammed_pct", c => F(c.PlannerJammedPct), (c, v) => c.PlannerJammedPct = P(v)),
             new Column("mod_ms", c => F(c.ModMs), (c, v) => c.ModMs = P(v)),
+            new Column("car_commute_pct", c => F(c.CarCommutePct), (c, v) => c.CarCommutePct = P(v)),
+            new Column("car_home_pct", c => F(c.CarHomePct), (c, v) => c.CarHomePct = P(v)),
+            new Column("car_shop_pct", c => F(c.CarShopPct), (c, v) => c.CarShopPct = P(v)),
+            new Column("car_leisure_pct", c => F(c.CarLeisurePct), (c, v) => c.CarLeisurePct = P(v)),
+            new Column("car_other_pct", c => F(c.CarOtherPct), (c, v) => c.CarOtherPct = P(v)),
+            new Column("queued_commute_pct", c => F(c.QueuedCommutePct), (c, v) => c.QueuedCommutePct = P(v)),
+            new Column("queued_home_pct", c => F(c.QueuedHomePct), (c, v) => c.QueuedHomePct = P(v)),
+            new Column("queued_shop_pct", c => F(c.QueuedShopPct), (c, v) => c.QueuedShopPct = P(v)),
+            new Column("queued_leisure_pct", c => F(c.QueuedLeisurePct), (c, v) => c.QueuedLeisurePct = P(v)),
+            new Column("queued_other_pct", c => F(c.QueuedOtherPct), (c, v) => c.QueuedOtherPct = P(v)),
+            new Column("shop_trips", c => c.ShopTrips.ToString(Inv), (c, v) => c.ShopTrips = I(v)),
+            new Column("shop_places", c => c.ShopPlaces.ToString(Inv), (c, v) => c.ShopPlaces = I(v)),
+            new Column("shop_top5_pct", c => F(c.ShopTop5Pct), (c, v) => c.ShopTop5Pct = P(v)),
+            new Column("shop_km", c => F(c.ShopKm), (c, v) => c.ShopKm = P(v)),
+            new Column("leisure_trips", c => c.LeisureTrips.ToString(Inv), (c, v) => c.LeisureTrips = I(v)),
+            new Column("leisure_places", c => c.LeisurePlaces.ToString(Inv), (c, v) => c.LeisurePlaces = I(v)),
+            new Column("leisure_top5_pct", c => F(c.LeisureTop5Pct), (c, v) => c.LeisureTop5Pct = P(v)),
+            new Column("leisure_km", c => F(c.LeisureKm), (c, v) => c.LeisureKm = P(v)),
         };
 
         internal static string CsvHeaderLine => string.Join(",", Columns.Select(col => col.Name));
@@ -133,7 +159,17 @@ namespace LiveTrafficRouting
             Num(sb, "rrCars", RerouteCars); Num(sb, "rrTrucks", RerouteTrucks); Num(sb, "rrTaxis", RerouteTaxis);
             Num(sb, "rrBetter", RerouteBetter); Num(sb, "rrNoBetter", RerouteNoBetter); Num(sb, "rrSaved", RerouteSavedPct);
             Num(sb, "rrHeld", RerouteHeldBack); Num(sb, "planSpeed", PlannerSpeedPct); Num(sb, "planJammed", PlannerJammedPct);
-            Num(sb, "ms", ModMs, last: true);
+            Num(sb, "ms", ModMs);
+            // Destinations: -1 marks hours recorded before these were measured.
+            bool d = ShopTrips + LeisureTrips + CarCommutePct + CarHomePct + CarShopPct + CarLeisurePct + CarOtherPct > 0;
+            Num(sb, "cCom", d ? CarCommutePct : -1); Num(sb, "cHome", d ? CarHomePct : -1); Num(sb, "cShop", d ? CarShopPct : -1);
+            Num(sb, "cLeis", d ? CarLeisurePct : -1); Num(sb, "cOth", d ? CarOtherPct : -1);
+            Num(sb, "qCom", d ? QueuedCommutePct : -1); Num(sb, "qHome", d ? QueuedHomePct : -1); Num(sb, "qShop", d ? QueuedShopPct : -1);
+            Num(sb, "qLeis", d ? QueuedLeisurePct : -1); Num(sb, "qOth", d ? QueuedOtherPct : -1);
+            Num(sb, "sTrips", d ? ShopTrips : -1); Num(sb, "sPlaces", d ? ShopPlaces : -1);
+            Num(sb, "sTop5", d ? ShopTop5Pct : -1); Num(sb, "sKm", d ? ShopKm : -1);
+            Num(sb, "lTrips", d ? LeisureTrips : -1); Num(sb, "lPlaces", d ? LeisurePlaces : -1);
+            Num(sb, "lTop5", d ? LeisureTop5Pct : -1); Num(sb, "lKm", d ? LeisureKm : -1, last: true);
             sb.Append('}');
         }
 
@@ -152,6 +188,10 @@ namespace LiveTrafficRouting
                     Reroutes, RerouteCars, RerouteTrucks, RerouteTaxis, RerouteHeldBack, RerouteBetter, RerouteSavedPct, RerouteNoBetter));
                 sb.Append(string.Format(Inv, "Planner view: {0:0}% speed, {1:0.0}% jammed. ", PlannerSpeedPct, PlannerJammedPct));
             }
+            sb.Append(string.Format(Inv, "Queued cars by trip: {0:0}% commute, {1:0}% home, {2:0}% shopping, {3:0}% leisure, {4:0}% other. ",
+                QueuedCommutePct, QueuedHomePct, QueuedShopPct, QueuedLeisurePct, QueuedOtherPct));
+            sb.Append(string.Format(Inv, "Shopping: {0} trips to {1} places (top 5: {2:0}%), {3:0.0} km from home. Leisure: {4} trips to {5} places (top 5: {6:0}%), {7:0.0} km. ",
+                ShopTrips, ShopPlaces, ShopTop5Pct, ShopKm, LeisureTrips, LeisurePlaces, LeisureTop5Pct, LeisureKm));
             sb.Append(ModMs >= 0 ? string.Format(Inv, "Mod cost {0:0.00} ms per run.", ModMs) : "Mod cost not measured.");
             return sb.ToString();
         }
