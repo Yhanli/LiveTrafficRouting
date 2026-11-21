@@ -205,6 +205,14 @@ namespace LiveTrafficRouting
             }
         }
 
+        [SettingsUISection(GeneralSection, StatsGroup)]
+        [SettingsUIButton]
+        [SettingsUIConfirmation]
+        public bool ResetStatistics
+        {
+            set => StatisticsReset.ResetCurrentCity();
+        }
+
         private static string ModeLabel(string mode, string preset) =>
             mode == "Live" ? "Live traffic (" + preset + ")" : mode == "Native" ? "Native (mod off)" : "Mixed";
 

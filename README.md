@@ -74,6 +74,18 @@ Where to see them:
 - **Log:** with "Write traffic report to log" on, one line per game hour in `Logs/LiveTrafficRouting.log`.
 - **CSV:** open `captures.csv` in a spreadsheet and filter the `mode` column.
 
+### Fair A/B test (recommended)
+
+1. Save your city, and note the game date and time.
+2. Panel > Compare > **Reset statistics for this city** (or Options > Statistics). The old file is kept as a backup.
+3. Set the mod to **Off**, load the save, and let it run for a couple of game days. Don't build or change roads.
+4. Load **the same save** again, set the mod to **Balanced** (or the preset you want to test), and run for the same game time.
+5. Panel > Compare > **Same game time**: every game hour from the Native run is paired with the same game hour from
+   the Live run (for example 2029-01-08 07:00 in both), and only paired hours are averaged. History > By time of
+   day shows the same comparison per hour of the day.
+
+If you replay a game hour in the same mode, the latest recording of that hour counts.
+
 The mod adds nothing to save files. It can be removed at any time.
 
 ## Build

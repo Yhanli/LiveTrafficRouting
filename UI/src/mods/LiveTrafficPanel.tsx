@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { bindValue, useValue } from "cs2/api";
+import { bindValue, trigger, useValue } from "cs2/api";
 import { FloatingButton, Panel, Tooltip } from "cs2/ui";
 import styles from "./LiveTrafficPanel.module.scss";
 
@@ -32,7 +32,7 @@ interface ByHour { native?: Average[]; live?: Average[]; }
 
 type Filter = "All" | "Native" | "Live";
 type View = "Timeline" | "TimeOfDay";
-type TableScope = "AllHours" | "SameHours";
+type TableScope = "Paired" | "SameHours" | "AllHours";
 type Tab = "Now" | "Compare" | "History" | "Rerouting";
 type MetricKey = "speed" | "queued" | "jams" | "flow" | "local" | "navGain";
 
@@ -99,6 +99,38 @@ function sameHours(byHour: ByHour): { native: Average; live: Average; slots: num
     return { native: sum(n, slots), live: sum(l, slots), slots: slots.length };
 }
 
+/**
+ * Pairs each game hour (e.g. 2029-01-08 07:00) recorded with the mod off with the same game hour recorded with
+ * the mod on, as when the same save is played twice. Averages only the paired hours. If an hour was recorded
+ * more than once in a mode, the latest recording counts.
+ */
+function pairedHours(history: Capture[]): { native: Average; live: Average; pairs: number } {
+    const nat = new Map<string, Capture>();
+    const liv = new Map<string, Capture>();
+    for (const c of history) {
+        if (c.mode === "Native") nat.set(c.t, c);
+        else if (c.mode === "Live") liv.set(c.t, c);
+    }
+    const n: Average = { ...EMPTY };
+    const l: Average = { ...EMPTY };
+    let pairs = 0;
+    nat.forEach((a, t) => {
+        const b = liv.get(t);
+        if (!b) return;
+        pairs++;
+        for (const [dst, src] of [[n, a], [l, b]] as [Average, Capture][]) {
+            dst.hours++;
+            dst.speed += src.speed; dst.queued += src.queued; dst.jams += src.jams; dst.local += src.local;
+            dst.flow += src.flow; dst.navKmh += src.navKmh; dst.otherKmh += src.otherKmh;
+        }
+    });
+    for (const a of [n, l]) {
+        const k = Math.max(1, a.hours);
+        a.speed /= k; a.queued /= k; a.jams /= k; a.local /= k; a.flow /= k; a.navKmh /= k; a.otherKmh /= k;
+    }
+    return { native: n, live: l, pairs };
+}
+
 const Row = ({ label, value, hint }: { label: string; value: string; hint?: string }) => {
     const row = (
         <div className={styles.row}>
@@ -153,7 +185,8 @@ export const LiveTrafficPanel = () => {
     const [expanded, setExpanded] = useState(false);
     const [filter, setFilter] = useState<Filter>("All");
     const [view, setView] = useState<View>("Timeline");
-    const [scope, setScope] = useState<TableScope>("SameHours");
+    const [scope, setScope] = useState<TableScope>("Paired");
+    const [confirmReset, setConfirmReset] = useState(false);
     const [metricKey, setMetricKey] = useState<MetricKey>("speed");
     const [hover, setHover] = useState<number>(-1);
     const [tab, setTab] = useState<Tab>("Now");
@@ -168,13 +201,14 @@ export const LiveTrafficPanel = () => {
     const averages = useMemo(() => parse<Averages>(averagesJson, {}), [averagesJson]);
     const byHour = useMemo(() => parse<ByHour>(byHourJson, {}), [byHourJson]);
     const matched = useMemo(() => sameHours(byHour), [byHour]);
+    const paired = useMemo(() => pairedHours(history), [history]);
 
     const metric = METRICS.find(m => m.key === metricKey) ?? METRICS[0];
     const lastLive = [...history].reverse().find(c => c.mode === "Live");
 
     // Comparison table source: all recorded hours, or only the hours of the day both modes have.
-    const tableNative = scope === "SameHours" ? matched.native : (averages.native ?? EMPTY);
-    const tableLive = scope === "SameHours" ? matched.live : (averages.live ?? EMPTY);
+    const tableNative = scope === "Paired" ? paired.native : scope === "SameHours" ? matched.native : (averages.native ?? EMPTY);
+    const tableLive = scope === "Paired" ? paired.live : scope === "SameHours" ? matched.live : (averages.live ?? EMPTY);
     const cell = (a: Average, f: (a: Average) => string) => (a.hours > 0 ? f(a) : "-");
 
     // Timeline chart data
@@ -213,7 +247,7 @@ export const LiveTrafficPanel = () => {
                         <div className={styles.tabs}>
                             {(["Now", "Compare", "History", "Rerouting"] as Tab[]).map(t => (
                                 <div key={t} className={tab === t ? `${styles.tab} ${styles.tabOn}` : styles.tab}
-                                     onClick={() => { setTab(t); setHover(-1); }}>
+                                     onClick={() => { setTab(t); setHover(-1); setConfirmReset(false); }}>
                                     {t === "Rerouting" ? "Re-routing" : t}
                                 </div>
                             ))}
@@ -243,10 +277,18 @@ export const LiveTrafficPanel = () => {
                             {/* Native vs Live */}
                             <div className={styles.sectionTitle}>Native vs live traffic (this city)</div>
                             <div className={styles.toggles}>
-                                <Toggle label="Same times of day" selected={scope === "SameHours"} onClick={() => setScope("SameHours")} />
+                                <Toggle label="Same game time" selected={scope === "Paired"} onClick={() => setScope("Paired")} />
+                            <Toggle label="Same times of day" selected={scope === "SameHours"} onClick={() => setScope("SameHours")} />
                                 <Toggle label="All hours" selected={scope === "AllHours"} onClick={() => setScope("AllHours")} />
                             </div>
-                            {scope === "SameHours" && (
+                            {scope === "Paired" && (
+                            <div className={styles.note}>
+                                {paired.pairs > 0
+                                    ? `${paired.pairs} game hours recorded in both modes (same save played twice), compared hour by hour.`
+                                    : "No game hour recorded in both modes yet. Play the same save once with the mod Off and once on Live, for the same game time."}
+                            </div>
+                        )}
+                        {scope === "SameHours" && (
                                 <div className={styles.note}>
                                     {matched.slots > 0
                                         ? `Only the ${matched.slots} hours of the day recorded in both modes, each weighted equally.`
@@ -276,6 +318,17 @@ export const LiveTrafficPanel = () => {
                                 ))}
                             </div>
 
+                        <div className={styles.resetRow}>
+                                <div className={confirmReset ? `${styles.resetButton} ${styles.resetConfirm}` : styles.resetButton}
+                                     onClick={() => {
+                                         if (confirmReset) { trigger(GROUP, "resetStats"); setConfirmReset(false); }
+                                         else setConfirmReset(true);
+                                     }}>
+                                    {confirmReset ? "Click again to delete this city's statistics" : "Reset statistics for this city"}
+                                </div>
+                                {confirmReset && <div className={styles.toggle} onClick={() => setConfirmReset(false)}>Cancel</div>}
+                            </div>
+                            <div className={styles.note}>A backup of the old statistics file is kept in ModsData/LiveTrafficRouting.</div>
                         </>)}
                         {tab === "History" && (<>
                             {/* Charts */}

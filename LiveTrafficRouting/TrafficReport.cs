@@ -353,6 +353,46 @@ namespace LiveTrafficRouting
             return sb.ToString();
         }
 
+        /// <summary>
+        /// Deletes all captures of the current city (other cities are kept). The previous file is copied to
+        /// captures-backup-yyyyMMdd-HHmmss.csv first. Returns how many game hours were removed.
+        /// </summary>
+        public static int ClearCurrentCity()
+        {
+            EnsureLoaded();
+            string city = CurrentCity;
+            int removed = s_Captures.RemoveAll(c => c.City == city);
+            Version++;
+            try
+            {
+                string path = FilePath;
+                if (File.Exists(path))
+                {
+                    string backup = Path.Combine(Path.GetDirectoryName(path),
+                        "captures-backup-" + DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + ".csv");
+                    File.Copy(path, backup, overwrite: true);
+
+                    // Keep the other cities' rows (including any beyond the in-memory limit).
+                    string[] lines = File.ReadAllLines(path, Encoding.UTF8);
+                    using (var w = new StreamWriter(path, append: false, Encoding.UTF8))
+                    {
+                        w.WriteLine(string.Join(",", TrafficCapture.CsvHeader));
+                        for (int i = 1; i < lines.Length; i++)
+                        {
+                            TrafficCapture c = TrafficCapture.FromCsv(lines[i]);
+                            if (c != null && c.City != city) w.WriteLine(lines[i]);
+                        }
+                    }
+                    Logger.Info($"Cleared {removed} traffic captures of '{city}'. Backup: {backup}");
+                }
+            }
+            catch (Exception e)
+            {
+                Logger.Warn($"Could not rewrite traffic captures: {e.Message}");
+            }
+            return removed;
+        }
+
         private static void EnsureLoaded()
         {
             if (s_Loaded) return;

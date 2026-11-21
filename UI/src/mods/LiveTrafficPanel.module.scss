@@ -247,3 +247,25 @@ $mixed: #b0a060;
     color: white;
     border-bottom: 2rem solid #5ecf8a;
 }
+
+.resetRow {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    margin-top: 10rem;
+}
+.resetButton {
+    padding: 4rem 10rem;
+    border-radius: 3rem;
+    font-size: 12rem;
+    background-color: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.85);
+    cursor: pointer;
+    margin-right: 6rem;
+    &:hover { background-color: rgba(255, 255, 255, 0.16); }
+}
+.resetConfirm {
+    background-color: rgba(214, 84, 84, 0.75);
+    color: white;
+    &:hover { background-color: rgba(230, 90, 90, 0.9); }
+}

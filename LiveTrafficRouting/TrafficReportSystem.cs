@@ -247,6 +247,15 @@ namespace LiveTrafficRouting
             base.OnDestroy();
         }
 
+        /// <summary>Starts counting afresh (after the statistics were reset). Main thread.</summary>
+        internal void RestartHour()
+        {
+            m_LastJob.Complete();
+            m_HasPendingSample = false;
+            m_Hour = new HourAccumulator();
+            m_HourKey = DateTime.MinValue;
+        }
+
         protected override void OnGamePreload(Purpose purpose, GameMode mode)
         {
             base.OnGamePreload(purpose, mode);

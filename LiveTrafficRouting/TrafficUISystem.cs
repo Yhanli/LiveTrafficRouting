@@ -27,6 +27,7 @@ namespace LiveTrafficRouting
             AddUpdateBinding(new GetterValueBinding<string>(Group, "history", () => { Refresh(); return m_HistoryJson; }));
             AddUpdateBinding(new GetterValueBinding<string>(Group, "averages", () => { Refresh(); return m_AveragesJson; }));
             AddUpdateBinding(new GetterValueBinding<string>(Group, "byHour", () => { Refresh(); return m_ByHourJson; }));
+            AddBinding(new TriggerBinding(Group, "resetStats", StatisticsReset.ResetCurrentCity));
             Logger.Info("TrafficUISystem created.");
         }
 

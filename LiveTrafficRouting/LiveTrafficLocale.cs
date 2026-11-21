@@ -93,6 +93,13 @@ namespace LiveTrafficRouting
                 { s.GetOptionDescLocaleID(nameof(LiveTrafficSettings.StatModCost)),
                     "How long the mod's traffic and re-routing work takes, measured once per game hour. It runs in the background on a worker thread." },
 
+                { s.GetOptionLabelLocaleID(nameof(LiveTrafficSettings.ResetStatistics)), "Reset statistics for this city" },
+                { s.GetOptionDescLocaleID(nameof(LiveTrafficSettings.ResetStatistics)),
+                    "Deletes all recorded game hours of the current city, to start a new comparison. Other cities are kept, " +
+                    "and the old file is saved as a backup in ModsData/LiveTrafficRouting." },
+                { s.GetOptionWarningLocaleID(nameof(LiveTrafficSettings.ResetStatistics)),
+                    "Delete all recorded statistics of this city? A backup of the file is kept." },
+
                 { s.GetOptionLabelLocaleID(nameof(LiveTrafficSettings.LogStatistics)), "Write traffic report to log" },
                 { s.GetOptionDescLocaleID(nameof(LiveTrafficSettings.LogStatistics)),
                     "Every game hour, write the traffic report (also when the mod is off) to Logs/LiveTrafficRouting.log. " +
