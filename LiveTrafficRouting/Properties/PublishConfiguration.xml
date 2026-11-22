@@ -56,7 +56,7 @@ Especially from big cities (250k+) and players using other traffic mods. Please 
 	<ChangeLog>
 First release: live traffic routing, re-routing while driving for cars, delivery trucks and taxis, presets (Relaxed, Balanced, Eager), and an optional statistics panel for traffic geeks.
 	</ChangeLog>
-	<!--Private while testing the upload; switch to Public to release.-->
+	<!--Supported values Public, Private, Unlisted-->
 	<ExternalLink Type="github" Url="https://github.com/Yhanli/LiveTrafficRouting" />
-	<AccessLevel Value="Private" />
+	<AccessLevel Value="Public" />
 </Publish>
