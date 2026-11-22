@@ -33,6 +33,8 @@ Turn on **Statistics panel** in the options to get a traffic icon in the game wi
 	</LongDescription>
 	<Thumbnail Value="Properties/Thumbnail.png" />
 	<!--Screenshots, shown in this order. Paradox Mods rejects images over 2.1 MB: keep them as JPG.-->
+	<Screenshot Value="Properties/Screenshots/0a-before-after.png" />
+	<Screenshot Value="Properties/Screenshots/0b-how-it-works.png" />
 	<Screenshot Value="Properties/Screenshots/1-interchange.jpg" />
 	<Screenshot Value="Properties/Screenshots/2-hotspots-native-vs-live.jpg" />
 	<Screenshot Value="Properties/Screenshots/3-jam-warnings-by-hour.jpg" />

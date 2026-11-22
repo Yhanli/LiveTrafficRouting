@@ -46,4 +46,10 @@ Cities: Skylines II **code mod** (C#, Unity ECS). Goal: congestion-aware routing
 - Source files use CRLF line endings; scripted find/replace must account for `\r\n`.
 - `dotnet` is not on PATH; use `C:\Program Files\dotnet\dotnet.exe` (the build script does).
 - No automated tests. Verification happens in game: logs at `...\Cities Skylines II\Logs\LiveTrafficRouting.log`.
-- Only publish when the user asks.
+- Run `tools\check.ps1` before committing (publish config, image sizes, a text for every option and dropdown value,
+  no "Google" anywhere).
+- Publishing: only when the user asks; it uploads under their Paradox account. `tools\publish.ps1` runs the checks,
+  refuses uncommitted work or an existing vX.Y.Z tag, uses PublishNewMod while ModId is empty (then put the new id in
+  PublishConfiguration.xml) and PublishNewVersion afterwards, and tags the commit. AccessLevel is Private until release.
+- Images: `tools\make-thumbnail.ps1` and `tools\make-explainers.ps1` (run with `powershell.exe -STA`), and
+  `tools\convert-screenshots.ps1` for in-game screenshots (to JPG).
