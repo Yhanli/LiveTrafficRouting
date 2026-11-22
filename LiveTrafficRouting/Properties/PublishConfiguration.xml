@@ -9,6 +9,15 @@
 Work in progress.
 	</LongDescription>
 	<Thumbnail Value="Properties/Thumbnail.png" />
+	<!--Screenshots, shown in this order. Paradox Mods rejects images over 2.1 MB: keep them as JPG.-->
+	<Screenshot Value="Properties/Screenshots/1-interchange.jpg" />
+	<Screenshot Value="Properties/Screenshots/2-hotspots-native-vs-live.jpg" />
+	<Screenshot Value="Properties/Screenshots/3-jam-warnings-by-hour.jpg" />
+	<Screenshot Value="Properties/Screenshots/4-queues-timeline.jpg" />
+	<Screenshot Value="Properties/Screenshots/5-right-now.jpg" />
+	<Screenshot Value="Properties/Screenshots/6-rerouting.jpg" />
+	<Screenshot Value="Properties/Screenshots/7-runs.jpg" />
+	<Screenshot Value="Properties/Screenshots/8-options.jpg" />
 	<Tag Value="Code Mod" />
 	<ForumLink Value="" />
 	<ModVersion Value="0.1.0" />
