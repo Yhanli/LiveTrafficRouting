@@ -28,9 +28,9 @@ namespace LiveTrafficRouting
                     "and some drivers already on the road switch to a faster way when their route jams up. " +
                     "Without this mod, drivers only learn very slowly (over game days) which roads are usually busy, and never change their mind mid-trip.\n\n" +
                     "Off: the game's normal behaviour (the sliders are greyed out).\n" +
-                    "Relaxed: drivers only avoid bad jams and mostly stay on main roads. About 1 in 7 drivers re-routes mid-trip.\n" +
-                    "Balanced: recommended. New trips avoid jams within about 10-20 game minutes; about 1 in 3 drivers re-routes mid-trip.\n" +
-                    "Eager: drivers react fast and strongly; a jammed road is avoided almost like a closed one, and 3 in 4 drivers re-route mid-trip. Can move traffic onto residential streets.\n" +
+                    "Relaxed: a light touch. Drivers avoid the worst jams and stay on main roads; about 1 in 3 re-routes mid-trip. Fewer jam warnings, little else changes.\n" +
+                    "Balanced: recommended. Drivers react quickly to jams and 3 in 4 re-route mid-trip. In testing: about a quarter fewer vehicles waiting in queues, far fewer jam warnings, and only slightly more traffic on local streets.\n" +
+                    "Eager: the strongest. A jammed road is treated almost like a closed one and every driver re-routes. Queues drop the most, but noticeably more traffic cuts through neighbourhoods.\n" +
                     "Custom: your own mix. Picking a preset fills in the sliders below; changing any slider switches to Custom." },
                 { s.GetEnumValueLocaleID(TrafficAwareness.Off), "Off (game default)" },
                 { s.GetEnumValueLocaleID(TrafficAwareness.Relaxed), "Relaxed" },

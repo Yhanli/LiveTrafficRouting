@@ -27,9 +27,9 @@ Background and design: [docs/research.md](docs/research.md).
 | Choice | What you'll see |
 |---|---|
 | Off (game default) | The game's normal behaviour. |
-| Relaxed | Drivers only avoid bad jams and mostly stay on main roads. |
-| Balanced (default) | Drivers starting a trip avoid jams within about 10–20 game minutes. |
-| Eager | Drivers react fast and strongly: a jammed road is avoided almost like a closed one, 3 in 4 drivers re-route mid-trip. Can push traffic into residential streets. |
+| Relaxed | A light touch: drivers avoid the worst jams and stay on main roads. Fewer jam warnings, little else changes. |
+| Balanced (default) | Drivers react quickly; 3 in 4 re-route mid-trip. Tested: queues -28%, speed +3%, jam warnings -87%, local streets +10%. |
+| Eager | Strongest: a jammed road is treated almost as closed, every driver re-routes. Tested: queues -38%, speed +6%, but local streets +33%. |
 | Custom | Your own mix. Chosen automatically when you change a slider. |
 
 The sliders are always visible (greyed out when Off). Picking a preset fills them in with these values; changing any
@@ -37,14 +37,15 @@ slider switches the dropdown to Custom:
 
 | Slider | Meaning | Relaxed | Balanced | Eager |
 |---|---|---|---|---|
-| Right now vs usual traffic | 100% = only current traffic, 0% = only the usual traffic for this time of day (vanilla) | 50% | 75% | 100% |
-| How quickly jams are noticed | Higher = notices new and cleared jams sooner, but traffic may swing between roads | 30% | 50% | 80% |
-| Jam penalty strength (25-1000%) | Multiplies the extra time a jam adds (200%: twice as slow looks three times as slow) | 75% | 100% | 250% |
-| Avoid jams up to (2-100×) | The worst a jammed road can look vs driving it at the limit (the pathfinder's own limit is 256×) | 4× | 10× | 50× |
-| Drivers who re-route while driving | Share of drivers with live navigation (0% = no mid-trip re-routing) | 15% | 30% | 75% |
-| Re-route when the way ahead gets slower by | How much worse the rest of the route must get vs when planned | 50% | 30% | 15% |
+| Right now vs usual traffic | 100% = only current traffic, 0% = only the usual traffic for this time of day (vanilla) | 75% | 100% | 100% |
+| How quickly jams are noticed | Higher = notices new and cleared jams sooner, but traffic may swing between roads | 50% | 80% | 100% |
+| Jam penalty strength (25-1000%) | Multiplies the extra time a jam adds (200%: twice as slow looks three times as slow) | 100% | 250% | 1000% |
+| Avoid jams up to (2-100×) | The worst a jammed road can look vs driving it at the limit (the pathfinder's own limit is 256×) | 10× | 50× | 100× |
+| Drivers who re-route while driving | Share of drivers with live navigation (0% = no mid-trip re-routing) | 30% | 75% | 100% |
+| Re-route when the way ahead gets slower by | How much worse the rest of the route must get vs when planned | 30% | 15% | 15% |
 
-If you were on a preset whose values changed in an update (Eager), the new values are applied automatically.
+If you were on a preset whose values changed in an update, the new values are applied automatically. (v1 moved the
+presets: the old Balanced is now Relaxed, the tested Eager is now Balanced, and Eager is the strongest tested setup.)
 
 **For traffic geeks** (both off by default):
 - **Statistics panel**: shows the Live Traffic icon and panel and records statistics (below). Off = nothing is recorded.

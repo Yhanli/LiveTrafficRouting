@@ -59,11 +59,13 @@ namespace LiveTrafficRouting
             }
         }
 
-        private static readonly Tuning kRelaxed = new Tuning(50f, 30f, 75f, 4f, 15f, 50f);
-        private static readonly Tuning kBalanced = new Tuning(75f, 50f, 100f, 10f, 30f, 30f);
-        // Eager v2: stronger than the first version (penalty 150%, cap 20x, 60% navigation, +20%), which still
-        // felt mild in testing.
-        private static readonly Tuning kEager = new Tuning(100f, 80f, 250f, 50f, 75f, 15f);
+        // v1 presets, from same-save A/B tests against the mod off (2-3 game days each):
+        //  - Relaxed  = the old Balanced: jam warnings -42%, queues and speed unchanged, +8% on local streets.
+        //  - Balanced = the old Eager v2: queues -28%, speed +3%, jam warnings -87%, +10% on local streets.
+        //  - Eager    = the tested "max" setup: queues -38%, speed +6%, but +33% on local streets.
+        private static readonly Tuning kRelaxed = new Tuning(75f, 50f, 100f, 10f, 30f, 30f);
+        private static readonly Tuning kBalanced = new Tuning(100f, 80f, 250f, 50f, 75f, 15f);
+        private static readonly Tuning kEager = new Tuning(100f, 100f, 1000f, 100f, 100f, 15f);
 
         private bool m_IsLoadingDefaults;
         private TrafficAwareness m_Awareness;
