@@ -94,8 +94,9 @@ function MapPanel($dc, [double]$x0, [int]$mainCars, [int]$bypassCars, [bool]$wit
     }
     # bypass cars, on top of the route
     for ($k = 0; $k -lt $bypassCars; $k++) {
-        $cx = $x0 + 305 + $k * 34
-        $dc.DrawRoundedRectangle((B $carColors[($k + 1) % 4]), (P (B (C 255 30 30 34)) 2), (Rc $cx ($bypassY - 7) 26 14), 4, 4)
+        # the flat part of the side road runs from x0+290 to x0+430: keep the cars on it
+        $cx = $x0 + 298 + $k * 27
+        $dc.DrawRoundedRectangle((B $carColors[($k + 1) % 4]), (P (B (C 255 30 30 34)) 2), (Rc $cx ($bypassY - 7) 22 14), 4, 4)
     }
     # start and destination
     $dc.DrawEllipse($white, (P (B $green) 8), (Pt ($x0 + 60) $roadY), 18, 18)
@@ -118,7 +119,7 @@ MapPanel $dc 60 18 0 $false
 Text $dc 'Everyone keeps the road they always take. The side road stays empty while the main road jams.' 26 $soft 420 750 400 640
 
 Text $dc 'WITH LIVE TRAFFIC ROUTING' 38 (B (C 255 74 222 128)) 1180 160 900
-MapPanel $dc 820 9 6 $true
+MapPanel $dc 820 8 5 $true
 Text $dc 'Drivers see the jam like a navigation app would and spread out: shorter queues, everyone gets there sooner.' 26 $soft 1180 750 400 640
 $dc.Close()
 Save $dv '0a-before-after.png'
