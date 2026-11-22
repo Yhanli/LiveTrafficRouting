@@ -1020,11 +1020,22 @@ namespace LiveTrafficRouting
         /// <summary>The whole game's memory (working set), for context only.</summary>
         private static float GameMemoryMb()
         {
+            // The process API returns 0 inside the game's runtime, so ask Unity first: the memory it has reserved.
+            try
+            {
+                long reserved = UnityEngine.Profiling.Profiler.GetTotalReservedMemoryLong();
+                if (reserved > 0) return reserved / (1024f * 1024f);
+            }
+            catch
+            {
+                // fall through
+            }
             try
             {
                 using (System.Diagnostics.Process p = System.Diagnostics.Process.GetCurrentProcess())
                 {
-                    return p.WorkingSet64 / (1024f * 1024f);
+                    long bytes = p.WorkingSet64 > 0 ? p.WorkingSet64 : p.PrivateMemorySize64;
+                    return bytes > 0 ? bytes / (1024f * 1024f) : -1f;
                 }
             }
             catch
