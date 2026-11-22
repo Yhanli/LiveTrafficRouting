@@ -430,7 +430,7 @@ function destSeries(a: Capture[], b: Capture[], scope: Scope, m: DestMetric) {
     return { xs, ys, paired: false, consecutive: true };
 }
 type View = "Timeline" | "TimeOfDay";
-const MAX_SLOTS = 48;
+const WINDOW_SIZES = [24, 48, 96];
 
 export const LiveTrafficPanel = () => {
     const enabled = useValue(enabled$);
@@ -444,6 +444,9 @@ export const LiveTrafficPanel = () => {
     const [pickA, setPickA] = useState("");
     const [pickB, setPickB] = useState("");
     const [hover, setHover] = useState(-1);
+    // Timeline window: how many game hours, and where it ends (index into all game hours; -1 = follow run B).
+    const [tlSize, setTlSize] = useState(48);
+    const [tlEnd, setTlEnd] = useState(-1);
     const [pending, setPending] = useState("");
 
     const current = parse<Current>(useValue(current$), {});
@@ -463,7 +466,7 @@ export const LiveTrafficPanel = () => {
 
     if (!enabled) return null;
 
-    const switchTab = (t: Tab) => { setTab(t); setHover(-1); setPending(""); };
+    const switchTab = (t: Tab) => { setTab(t); setHover(-1); setPending(""); setTlEnd(-1); };
     const nameA = runName(runA, runs);
     const nameB = runName(runB, runs);
 
@@ -479,10 +482,44 @@ export const LiveTrafficPanel = () => {
     const metric = TRAFFIC_METRICS.find(m => m.key === metricKey) ?? TRAFFIC_METRICS[0];
     const rrMetric = REROUTE_METRICS.find(m => m.key === rrMetricKey) ?? REROUTE_METRICS[0];
 
+    /** All game hours of both runs (sorted) and the visible window of them. */
+    const timelineWindow = (a: Capture[], b: Capture[]) => {
+        const all = Array.from(new Set([...a.map(c => c.t), ...b.map(c => c.t)])).sort();
+        // By default the window ends at run B's newest hour (a run in progress stays in view), else A's.
+        const lastOf = (list: Capture[]) => list.reduce((x, c) => (c.t > x ? c.t : x), "");
+        const anchor = lastOf(b) || lastOf(a);
+        const autoEnd = Math.max(0, all.indexOf(anchor));
+        const end = tlEnd < 0 ? autoEnd : Math.min(tlEnd, all.length - 1);
+        const start = Math.max(0, end - tlSize + 1);
+        return { all, start, end, times: all.slice(start, end + 1) };
+    };
+
+    /** Earlier / later / window size buttons under the timeline. */
+    const windowControls = (a: Capture[], b: Capture[]) => {
+        const w = timelineWindow(a, b);
+        if (w.all.length === 0) return null;
+        const step = Math.max(1, Math.floor(tlSize / 2));
+        const go = (end: number) => { setTlEnd(Math.max(0, Math.min(w.all.length - 1, end))); setHover(-1); };
+        return (
+            <div className={styles.toggles}>
+                <Toggle label="|<" selected={false} onClick={() => go(Math.min(w.all.length - 1, tlSize - 1))} />
+                <Toggle label="< Earlier" selected={false} onClick={() => go(w.end - step)} />
+                <Toggle label="Later >" selected={false} onClick={() => go(w.end + step)} />
+                <Toggle label=">|" selected={false} onClick={() => go(w.all.length - 1)} />
+                <Toggle label="Follow B" selected={tlEnd < 0} onClick={() => { setTlEnd(-1); setHover(-1); }} />
+                <div className={styles.spacer} />
+                {WINDOW_SIZES.map(n => (
+                    <Toggle key={n} label={`${n} h`} selected={tlSize === n} onClick={() => { setTlSize(n); setHover(-1); }} />
+                ))}
+                <div className={styles.windowInfo}>{`${w.all[w.start]?.substring(5) ?? ""} to ${w.all[w.end]?.substring(5) ?? ""} (${w.start + 1}-${w.end + 1} of ${w.all.length} h)`}</div>
+            </div>
+        );
+    };
+
     const timelineSlots = (m: Metric, a: Capture[], b: Capture[]): Slot[] => {
         const ma = byTime(a);
         const mb = byTime(b);
-        const times = Array.from(new Set([...ma.keys(), ...mb.keys()])).sort().slice(-MAX_SLOTS);
+        const times = timelineWindow(a, b).times;
         return times.map(t => {
             const ca = ma.get(t);
             const cb = mb.get(t);
@@ -492,7 +529,7 @@ export const LiveTrafficPanel = () => {
             const d = fmtDiff(va, vb, m);
             return {
                 key: t,
-                label: h === 0 ? t.substring(5, 10) : h % 3 === 0 ? pad2(h) : "",
+                label: h === 0 ? t.substring(5, 10) : h % (tlSize > 48 ? 6 : 3) === 0 ? pad2(h) : "",
                 values: [va, vb],
                 detail: `${t} - ${m.label}: ${nameA} ${fmt(va, m.digits, m.unit)}, ${nameB} ${fmt(vb, m.digits, m.unit)}${d.text !== "-" ? `, difference ${d.text}` : ""}`,
                 tip: (
@@ -546,8 +583,8 @@ export const LiveTrafficPanel = () => {
 
     const pickers = (
         <>
-            <RunPicker label="A" runs={runs} selected={runA?.id ?? ""} onSelect={id => { setPickA(id); setHover(-1); }} color={styles.colorA} />
-            <RunPicker label="B" runs={runs} selected={runB?.id ?? ""} onSelect={id => { setPickB(id); setHover(-1); }} color={styles.colorB} />
+            <RunPicker label="A" runs={runs} selected={runA?.id ?? ""} onSelect={id => { setPickA(id); setHover(-1); setTlEnd(-1); }} color={styles.colorA} />
+            <RunPicker label="B" runs={runs} selected={runB?.id ?? ""} onSelect={id => { setPickB(id); setHover(-1); setTlEnd(-1); }} color={styles.colorB} />
         </>
     );
 
@@ -666,6 +703,7 @@ export const LiveTrafficPanel = () => {
                                 <Chart metric={metric} hover={hover} setHover={setHover}
                                        slots={view === "Timeline" ? timelineSlots(metric, capsA, capsB) : hourSlots(metric, capsA, capsB)}
                                        idle={view === "Timeline" ? "Game hours of both runs side by side. Hover a bar for details." : "Average per hour of the day. Hover an hour to compare."} />
+                                {view === "Timeline" && windowControls(capsA, capsB)}
                                 {legend}
                             </>)}
                         </>)}
@@ -801,6 +839,7 @@ export const LiveTrafficPanel = () => {
                                 <Chart metric={rrMetric} hover={hover} setHover={setHover}
                                        slots={rrView === "Timeline" ? timelineSlots(rrMetric, rrA, rrB) : hourSlots(rrMetric, rrA, rrB)}
                                        idle="Live runs only (a Native run has no re-routing). Hover for details." />
+                                {rrView === "Timeline" && windowControls(rrA, rrB)}
                                 {legend}
                             </>) : (
                                 <div className={styles.empty}>
