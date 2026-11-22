@@ -367,6 +367,10 @@ namespace LiveTrafficRouting
             public string Settings = "";
             // Not recorded: the hour started before we were counting (game loaded, settings changed, reset).
             public bool Partial;
+            // Performance: real time, simulation frames and rendered frames of the steady (unpaused) samples.
+            public double RealSeconds, SimFrames, RenderFrames;
+            public float Speed = -1;     // game speed setting; -1 until known
+            public bool SpeedMixed;      // the speed setting changed during the hour
             // Per place (street or junction): queued vehicles and jam warnings, summed over the samples.
             public readonly Dictionary<Entity, float2> Places = new Dictionary<Entity, float2>();
             // Trip purpose counts and destination statistics (stat slots 9-24), and trips per destination.
@@ -427,6 +431,14 @@ namespace LiveTrafficRouting
         private float m_PendingSharePct;
 
         private HourAccumulator m_Hour = new HourAccumulator();
+
+        // Performance measuring between two updates.
+        private readonly System.Diagnostics.Stopwatch m_Clock = System.Diagnostics.Stopwatch.StartNew();
+        private double m_LastClock = -1;
+        private uint m_LastFrame;
+        private int m_LastRenderFrame;
+        private double m_IntervalEma = -1;
+        private int m_LongIntervals;
         private DateTime m_HourKey = DateTime.MinValue;
         private readonly float[] m_FlowStats = new float[5];
         private readonly float[] m_RerouteStats = new float[9];
@@ -513,6 +525,8 @@ namespace LiveTrafficRouting
             m_Hour = new HourAccumulator();
             m_HourKey = DateTime.MinValue;
             m_RunId = null;
+            m_LastClock = -1;
+            m_IntervalEma = -1;
         }
 
         protected override void OnGamePreload(Purpose purpose, GameMode mode)
@@ -525,6 +539,8 @@ namespace LiveTrafficRouting
             m_Hour = new HourAccumulator();
             m_HourKey = DateTime.MinValue;
             m_RunId = null;
+            m_LastClock = -1;
+            m_IntervalEma = -1;
             TrafficReportStore.SetCurrent(new TrafficSnapshot());
         }
 
@@ -558,6 +574,7 @@ namespace LiveTrafficRouting
                 AddSampleToHour();
                 m_HasPendingSample = false;
             }
+            MeasureInterval();
 
             // 2. New game hour: finish the previous one.
             DateTime now = m_TimeSystem.GetCurrentDateTime();
@@ -621,7 +638,14 @@ namespace LiveTrafficRouting
             m_PropertyRenterData.Update(this);
 
             uint frame = m_SimulationSystem.frameIndex;
-            JobHandle handle = new PruneTripsJob { m_Trips = m_Trips, m_Frame = frame }.Schedule(Dependency);
+            System.Diagnostics.Stopwatch reportTimer = null;
+            JobHandle start = Dependency;
+            if (ModTiming.ReportRequested)
+            {
+                start.Complete();
+                reportTimer = System.Diagnostics.Stopwatch.StartNew();
+            }
+            JobHandle handle = new PruneTripsJob { m_Trips = m_Trips, m_Frame = frame }.Schedule(start);
             handle = new CountJamsJob
             {
                 m_EntityType = m_EntityType,
@@ -673,6 +697,12 @@ namespace LiveTrafficRouting
                 m_Frame = frame,
             }.Schedule(m_ResidentQuery, handle);
 
+            if (reportTimer != null)
+            {
+                handle.Complete();
+                ModTiming.ReportMs = reportTimer.Elapsed.TotalMilliseconds;
+                ModTiming.ReportRequested = false;
+            }
             m_LastJob = handle;
             Dependency = handle;
             m_HasPendingSample = true;
@@ -722,6 +752,42 @@ namespace LiveTrafficRouting
                 NavSharePct = m_PendingSharePct,
                 ModMs = LastModMs(),
             });
+        }
+
+        /// <summary>
+        /// Real time, simulation frames and rendered frames since the last update, added to the hour. An interval much
+        /// longer than usual is a pause (the simulation doesn't update while paused) and is left out.
+        /// </summary>
+        private void MeasureInterval()
+        {
+            double now = m_Clock.Elapsed.TotalSeconds;
+            uint frame = m_SimulationSystem.frameIndex;
+            int render = UnityEngine.Time.frameCount;
+            float speed = m_SimulationSystem.selectedSpeed;
+            if (m_LastClock >= 0 && frame > m_LastFrame && render >= m_LastRenderFrame)
+            {
+                double dt = now - m_LastClock;
+                bool usual = m_IntervalEma < 0 || dt < 3 * m_IntervalEma + 0.5;
+                if (!usual && ++m_LongIntervals >= 2)
+                {
+                    // Twice in a row: not a pause, the game simply got slower (e.g. a lower speed setting).
+                    usual = true;
+                    m_IntervalEma = dt;
+                }
+                if (usual)
+                {
+                    m_LongIntervals = 0;
+                    m_IntervalEma = m_IntervalEma < 0 ? dt : m_IntervalEma * 0.8 + dt * 0.2;
+                    if (m_Hour.Speed < 0) m_Hour.Speed = speed;
+                    else if (Math.Abs(m_Hour.Speed - speed) > 0.01f) m_Hour.SpeedMixed = true;
+                    m_Hour.RealSeconds += dt;
+                    m_Hour.SimFrames += frame - m_LastFrame;
+                    m_Hour.RenderFrames += render - m_LastRenderFrame;
+                }
+            }
+            m_LastClock = now;
+            m_LastFrame = frame;
+            m_LastRenderFrame = render;
         }
 
         private static void AddCounts(NativeParallelHashMap<Entity, int> map, Dictionary<Entity, int> into)
@@ -868,6 +934,12 @@ namespace LiveTrafficRouting
                 RunId = h.RunId,
                 Settings = h.Settings,
                 RerouteHeldBack = (int)m_RerouteStats[5],
+                SpeedSetting = h.SpeedMixed ? -1f : h.Speed,
+                SimFps = !h.SpeedMixed && h.RealSeconds > 0 ? (float)(h.SimFrames / h.RealSeconds) : -1f,
+                RenderFps = !h.SpeedMixed && h.RealSeconds > 0 ? (float)(h.RenderFrames / h.RealSeconds) : -1f,
+                ModCpuPct = ModCpuShare(h),
+                ModMemMb = ModMemoryMb(),
+                GameMemMb = GameMemoryMb(),
                 CarCommutePct = PurposePct(h.Sums, kPurposeAll, 0),
                 CarHomePct = PurposePct(h.Sums, kPurposeAll, 1),
                 CarShopPct = PurposePct(h.Sums, kPurposeAll, 2),
@@ -918,6 +990,47 @@ namespace LiveTrafficRouting
                 Logger.Warn($"Could not record traffic hotspots: {e.Message}");
             }
             if (settings != null && settings.LogStatistics) Logger.Info(capture.ToLogLine());
+        }
+
+        /// <summary>
+        /// The mod's own work as a share of one CPU core: one timed run of each system, times how often it runs per
+        /// game hour (traffic and re-routing every 64 frames, statistics every 1024), over the real time of the hour.
+        /// </summary>
+        private static float ModCpuShare(HourAccumulator h)
+        {
+            if (h.RealSeconds <= 0 || h.SimFrames <= 0) return -1f;
+            const double framesPerHour = 262144.0 / 24.0;
+            double ms = 0;
+            if (ModTiming.FlowMs > 0) ms += ModTiming.FlowMs * framesPerHour / 64.0;
+            if (ModTiming.RerouteMs > 0) ms += ModTiming.RerouteMs * framesPerHour / 64.0;
+            if (ModTiming.ReportMs > 0) ms += ModTiming.ReportMs * framesPerHour / kSampleInterval;
+            double realSecondsPerHour = h.RealSeconds * framesPerHour / h.SimFrames;
+            return (float)(ms / (realSecondsPerHour * 1000.0) * 100.0);
+        }
+
+        /// <summary>Rough size of what the mod itself keeps in memory: its tracking tables and the statistics.</summary>
+        private float ModMemoryMb()
+        {
+            const double entry = 48; // key + value + hash map overhead, roughly
+            double tables = (m_FlowStats[4] + m_RerouteStats[8] + m_Trips.Count() + m_SeenTrips.Count()) * entry;
+            double stats = TrafficReportStore.CaptureCount * 700.0 + TrafficReportStore.HotspotCount * 200.0;
+            return (float)((tables + stats) / (1024.0 * 1024.0));
+        }
+
+        /// <summary>The whole game's memory (working set), for context only.</summary>
+        private static float GameMemoryMb()
+        {
+            try
+            {
+                using (System.Diagnostics.Process p = System.Diagnostics.Process.GetCurrentProcess())
+                {
+                    return p.WorkingSet64 / (1024f * 1024f);
+                }
+            }
+            catch
+            {
+                return -1f;
+            }
         }
 
         private static float LastModMs()

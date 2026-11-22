@@ -29,6 +29,8 @@ interface Capture {
     qCom: number; qHome: number; qShop: number; qLeis: number; qOth: number;
     sTrips: number; sPlaces: number; sTop5: number; sKm: number;
     lTrips: number; lPlaces: number; lTop5: number; lKm: number;
+    // Performance (-1 = not measured)
+    spd: number; simFps: number; fps: number; cpu: number; modMb: number; gameMb: number;
 }
 interface Hotspot { p: string; k: string; q: number; j: number; h: number; }
 interface Run { id: string; mode: string; preset: string; settings: string; first: string; last: string; hours: number; pinned?: number; baseline?: number; }
@@ -372,7 +374,13 @@ function modeLabel(mode?: string, preset?: string): string {
 // ---------------------------------------------------------------------------------------------
 // Panel
 // ---------------------------------------------------------------------------------------------
-type Tab = "Now" | "Compare" | "History" | "Hotspots" | "Destinations" | "Rerouting" | "Runs";
+type Tab = "Now" | "Compare" | "History" | "Hotspots" | "Destinations" | "Rerouting" | "Cost" | "Runs";
+const TAB_LABEL: Record<Tab, string> = {
+    Now: "Now", Compare: "Compare", History: "History", Hotspots: "Hotspots", Destinations: "Trips",
+    Rerouting: "Re-route", Cost: "Cost", Runs: "Runs",
+};
+
+
 
 /** A destination metric: value of one game hour, or null when that hour has no such data. */
 interface DestMetric { label: string; unit: string; digits: number; higherIsBetter: boolean; get: (c: Capture) => number | null; }
@@ -395,6 +403,18 @@ const LEISURE_METRICS: DestMetric[] = [
     { label: "Different places used", unit: "", digits: 0, higherIsBetter: true, get: field("lPlaces") },
     { label: "Trips to the 5 busiest", unit: "%", digits: 0, higherIsBetter: false, get: field("lTop5") },
     { label: "Distance from home", unit: " km", digits: 2, higherIsBetter: false, get: field("lKm") },
+];
+
+/** Simulation speed as game minutes per real second (a game hour is 262144 / 24 frames). */
+const GAME_FRAMES_PER_MINUTE = 262144 / 24 / 60;
+const COST_METRICS: DestMetric[] = [
+    { label: "Simulation speed (game min / s)", unit: "", digits: 1, higherIsBetter: true,
+      get: c => (typeof c.simFps === "number" && c.simFps > 0 ? c.simFps / GAME_FRAMES_PER_MINUTE : null) },
+    { label: "Frames per second", unit: "", digits: 0, higherIsBetter: true, get: field("fps") },
+    { label: "Mod CPU (% of one core)", unit: "%", digits: 2, higherIsBetter: false, get: field("cpu") },
+    { label: "Mod memory", unit: " MB", digits: 1, higherIsBetter: false, get: field("modMb") },
+    { label: "Game memory", unit: " MB", digits: 0, higherIsBetter: false, get: field("gameMb") },
+    { label: "Re-routes per hour", unit: "", digits: 0, higherIsBetter: true, get: c => (c.mode === "Live" ? c.rr : null) },
 ];
 
 /** Like seriesFor, for destination metrics (which skip hours without data). */
@@ -597,9 +617,9 @@ export const LiveTrafficPanel = () => {
                 <Panel header="Live Traffic" className={styles.panel} onClose={() => setExpanded(false)}>
                     <div className={styles.body}>
                         <div className={styles.tabs}>
-                            {(["Now", "Compare", "History", "Hotspots", "Destinations", "Rerouting", "Runs"] as Tab[]).map(t => (
+                            {(["Now", "Compare", "History", "Hotspots", "Destinations", "Rerouting", "Cost", "Runs"] as Tab[]).map(t => (
                                 <div key={t} className={tab === t ? `${styles.tab} ${styles.tabOn}` : styles.tab} onClick={() => switchTab(t)}>
-                                    {t === "Rerouting" ? "Re-routing" : t}
+                                    {TAB_LABEL[t]}
                                 </div>
                             ))}
                         </div>
@@ -622,6 +642,13 @@ export const LiveTrafficPanel = () => {
                             <InfoRow label="Mod processing time"
                                      value={current.mode === "Native" ? "mod is off (only statistics run)"
                                          : current.ms !== undefined && current.ms >= 0 ? `${fmt(current.ms, 2)} ms per run` : "measured once per game hour"} />
+                            {(() => {
+                                const last = [...history].reverse().find(c => c.run === current.run && typeof c.cpu === "number" && c.cpu > 0);
+                                if (!last) return <InfoRow label="Mod cost" value="after the first full game hour" />;
+                                const sim = last.simFps > 0 ? `, simulation ${fmt(last.simFps / GAME_FRAMES_PER_MINUTE, 1)} game min/s at speed ${fmt(last.spd, 0)}` : "";
+                                return <InfoRow label="Mod cost (last game hour)" value={`${fmt(last.cpu, 2)}% of one CPU core, ${fmt(last.modMb, 1)} MB${sim}`}
+                                                hint="The mod's own work (traffic, re-routing, statistics) as a share of one CPU core, and the memory it keeps. Re-routing also makes the game calculate extra routes; the Cost tab compares simulation speed with the mod off to show the full effect." />;
+                            })()}
                         </>)}
 
                         {tab === "Compare" && (<>
@@ -816,6 +843,69 @@ export const LiveTrafficPanel = () => {
                                         {table("Shopping trips (all travel modes, per game hour)", SHOP_METRICS)}
                                         {table("Leisure trips (all travel modes, per game hour)", LEISURE_METRICS)}
                                         <div className={styles.note}>{"If live traffic makes people pick other places, a Live run uses more different places, sends fewer trips to the 5 busiest, at a similar distance from home."}</div>
+                                    </>);
+                                })()}
+                            </>)}
+                        </>)}
+
+                        {tab === "Cost" && (<>
+                            {runs.length < 2 ? <div className={styles.empty}>{"Record a Native and a Live run from the same save, at the same game speed, to compare the cost."}</div> : (<>
+                                {pickers}
+                                <div className={styles.toggles}>
+                                    <Toggle label="Same game time" selected={scope === "Paired"} onClick={() => setScope("Paired")} />
+                                    <Toggle label="Same times of day" selected={scope === "SameHours"} onClick={() => setScope("SameHours")} />
+                                    <Toggle label="All hours" selected={scope === "AllHours"} onClick={() => setScope("AllHours")} />
+                                </div>
+                                {(() => {
+                                    const speedOf = (caps: Capture[]) => {
+                                        const v = caps.map(c => c.spd).filter(x => typeof x === "number" && x > 0);
+                                        if (v.length === 0) return null;
+                                        const counts = new Map<number, number>();
+                                        for (const x of v) counts.set(x, (counts.get(x) ?? 0) + 1);
+                                        return Array.from(counts.entries()).sort((p, q) => q[1] - p[1])[0][0];
+                                    };
+                                    const sa = speedOf(capsA);
+                                    const sb = speedOf(capsB);
+                                    const speedNote = sa === null || sb === null
+                                        ? "Performance is recorded from this version on."
+                                        : sa !== sb
+                                            ? `Warning: run A mostly ran at speed ${sa}, run B at speed ${sb}. Simulation speed and FPS only compare at the same speed setting.`
+                                            : `Both runs mostly at speed ${sa}. At the fastest speed the simulation runs as fast as your CPU allows, so any cost shows up there.`;
+                                    return (<>
+                                        <div className={styles.note}>{speedNote}</div>
+                                        <div className={styles.table}>
+                                            <div className={styles.tableRow}>
+                                                <div className={styles.tableLabel}></div>
+                                                <div className={`${styles.tableHead} ${styles.colorA}`}>{nameA}</div>
+                                                <div className={`${styles.tableHead} ${styles.colorB}`}>{nameB}</div>
+                                                <div className={styles.tableHeadWide}>B vs A</div>
+                                                <div className={styles.tableHeadSig}>Real?</div>
+                                            </div>
+                                            {COST_METRICS.map(dm => {
+                                                const ser = destSeries(capsA, capsB, scope, dm);
+                                                const mean = (v: number[]) => (v.length > 0 ? v.reduce((p, q) => p + q, 0) / v.length : null);
+                                                const va = mean(ser.xs);
+                                                const vb = mean(ser.ys);
+                                                // Shown even when only one run has the number (e.g. re-routes, mod CPU of a Native run).
+                                                const onlyA = va === null ? mean(capsA.map(dm.get).filter((x): x is number => x !== null)) : va;
+                                                const onlyB = vb === null ? mean(capsB.map(dm.get).filter((x): x is number => x !== null)) : vb;
+                                                const m: Metric = { key: dm.label, label: dm.label, unit: dm.unit, digits: dm.digits, higherIsBetter: dm.higherIsBetter, value: () => 0 };
+                                                const d = fmtDiff(va, vb, m);
+                                                const sig = significanceOf(ser);
+                                                return (
+                                                    <div className={styles.tableRow} key={dm.label}>
+                                                        <div className={styles.tableLabel}>{dm.label}</div>
+                                                        <div className={styles.tableCell}>{fmt(onlyA, dm.digits, dm.unit)}</div>
+                                                        <div className={styles.tableCell}>{fmt(onlyB, dm.digits, dm.unit)}</div>
+                                                        <div className={`${styles.tableCellWide} ${sig.verdict === "noise" ? "" : d.cls}`}>{d.text}</div>
+                                                        <div className={styles.tableCellSig}>
+                                                            {sig.verdict !== "n/a" && <span className={styles[`sig_${sig.verdict}`]}>{VERDICT_TEXT[sig.verdict]}</span>}
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                        <div className={styles.note}>{"Simulation speed and FPS show the full effect, including the extra routes the game calculates for re-routing. Mod CPU is only the mod's own work. Game memory is the whole game, for context: it grows with the city."}</div>
                                     </>);
                                 })()}
                             </>)}

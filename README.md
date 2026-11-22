@@ -94,12 +94,16 @@ Where to see them:
   - **History**: both runs side by side, **by time of day** or as a **timeline**, for any metric.
   - **Hotspots**: the streets and junctions with the most vehicles waiting in queues (and jam warnings), run A vs
     run B. Recorded per game hour (top 15 places) to `hotspots.csv`.
-  - **Destinations**: why queued cars are on the road (commuting, going home, shopping, leisure, other), and for
+  - **Trips** (destinations): why queued cars are on the road (commuting, going home, shopping, leisure, other), and for
     shopping and leisure trips (all travel modes): trips per hour, how many different places are used, % of trips to
     the 5 busiest places, and distance from home. Shows whether live traffic makes people pick other places, and how
     much a "change destination mid-trip" feature (leisure only) could help at most.
-  - **Re-routing**: re-routes, % that found a faster route, time saved, trucks and held-back re-routes, by time of
+  - **Re-route**: re-routes, % that found a faster route, time saved, trucks and held-back re-routes, by time of
     day or as a timeline.
+  - **Cost**: simulation speed (game minutes per real second), frames per second, the mod's own CPU share (% of
+    one core, all its systems) and memory, the whole game's memory, and re-routes per hour, run A vs run B with the
+    Real? check. Only hours at one steady game speed count; compare runs at the same speed setting (ideally the
+    fastest). The Now tab shows a one-line summary of the last game hour.
   - **Runs**: all runs with their settings; delete one run, **all Live runs (keeping the Native baseline)**, or
     everything for this city.
 - **Log:** with "Write traffic report to log" on, one line per game hour in `Logs/LiveTrafficRouting.log`.

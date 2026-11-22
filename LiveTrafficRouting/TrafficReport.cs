@@ -50,6 +50,14 @@ namespace LiveTrafficRouting
         public int ShopTrips, ShopPlaces, LeisureTrips, LeisurePlaces;
         public float ShopTop5Pct, ShopKm, LeisureTop5Pct, LeisureKm;
 
+        // Performance (-1 = not measured, e.g. the speed setting changed during the hour).
+        public float SpeedSetting;   // game speed setting (1, 2, 3)
+        public float SimFps;         // simulation frames per real second
+        public float RenderFps;      // rendered frames per second
+        public float ModCpuPct;      // the mod's own work, % of one CPU core
+        public float ModMemMb;       // what the mod keeps in memory (estimate)
+        public float GameMemMb;      // the whole game's memory, for context
+
         // ---- CSV: columns are matched by header name, so files from older versions still load ----
 
         private delegate string Getter(TrafficCapture c);
@@ -115,6 +123,12 @@ namespace LiveTrafficRouting
             new Column("leisure_places", c => c.LeisurePlaces.ToString(Inv), (c, v) => c.LeisurePlaces = I(v)),
             new Column("leisure_top5_pct", c => F(c.LeisureTop5Pct), (c, v) => c.LeisureTop5Pct = P(v)),
             new Column("leisure_km", c => F(c.LeisureKm), (c, v) => c.LeisureKm = P(v)),
+            new Column("speed_setting", c => F(c.SpeedSetting), (c, v) => c.SpeedSetting = P(v)),
+            new Column("sim_fps", c => F(c.SimFps), (c, v) => c.SimFps = P(v)),
+            new Column("render_fps", c => F(c.RenderFps), (c, v) => c.RenderFps = P(v)),
+            new Column("mod_cpu_pct", c => F(c.ModCpuPct), (c, v) => c.ModCpuPct = P(v)),
+            new Column("mod_mem_mb", c => F(c.ModMemMb), (c, v) => c.ModMemMb = P(v)),
+            new Column("game_mem_mb", c => F(c.GameMemMb), (c, v) => c.GameMemMb = P(v)),
         };
 
         internal static string CsvHeaderLine => string.Join(",", Columns.Select(col => col.Name));
@@ -169,7 +183,11 @@ namespace LiveTrafficRouting
             Num(sb, "sTrips", d ? ShopTrips : -1); Num(sb, "sPlaces", d ? ShopPlaces : -1);
             Num(sb, "sTop5", d ? ShopTop5Pct : -1); Num(sb, "sKm", d ? ShopKm : -1);
             Num(sb, "lTrips", d ? LeisureTrips : -1); Num(sb, "lPlaces", d ? LeisurePlaces : -1);
-            Num(sb, "lTop5", d ? LeisureTop5Pct : -1); Num(sb, "lKm", d ? LeisureKm : -1, last: true);
+            Num(sb, "lTop5", d ? LeisureTop5Pct : -1); Num(sb, "lKm", d ? LeisureKm : -1);
+            // Performance: 0 means an older row without these numbers.
+            Num(sb, "spd", SpeedSetting > 0 ? SpeedSetting : -1); Num(sb, "simFps", SimFps > 0 ? SimFps : -1);
+            Num(sb, "fps", RenderFps > 0 ? RenderFps : -1); Num(sb, "cpu", ModCpuPct > 0 ? ModCpuPct : -1);
+            Num(sb, "modMb", ModMemMb > 0 ? ModMemMb : -1); Num(sb, "gameMb", GameMemMb > 0 ? GameMemMb : -1, last: true);
             sb.Append('}');
         }
 
@@ -192,7 +210,9 @@ namespace LiveTrafficRouting
                 QueuedCommutePct, QueuedHomePct, QueuedShopPct, QueuedLeisurePct, QueuedOtherPct));
             sb.Append(string.Format(Inv, "Shopping: {0} trips to {1} places (top 5: {2:0}%), {3:0.0} km from home. Leisure: {4} trips to {5} places (top 5: {6:0}%), {7:0.0} km. ",
                 ShopTrips, ShopPlaces, ShopTop5Pct, ShopKm, LeisureTrips, LeisurePlaces, LeisureTop5Pct, LeisureKm));
-            sb.Append(ModMs >= 0 ? string.Format(Inv, "Mod cost {0:0.00} ms per run.", ModMs) : "Mod cost not measured.");
+            sb.Append(ModMs >= 0 ? string.Format(Inv, "Mod cost {0:0.00} ms per run. ", ModMs) : "Mod cost not measured. ");
+            sb.Append(string.Format(Inv, "Performance: speed setting {0}, {1:0} sim frames/s, {2:0} FPS, mod {3:0.00}% of one core, mod memory {4:0.0} MB, game memory {5:0} MB.",
+                SpeedSetting > 0 ? SpeedSetting.ToString("0.#", Inv) : "mixed", SimFps, RenderFps, ModCpuPct, ModMemMb, GameMemMb));
             return sb.ToString();
         }
 
@@ -379,6 +399,9 @@ namespace LiveTrafficRouting
         public static string FilePath => Path.Combine(Directory_, "captures.csv");
         public static string HotspotPath => Path.Combine(Directory_, "hotspots.csv");
         public static string PinnedPath => Path.Combine(Directory_, "pinned-runs.txt");
+
+        public static int CaptureCount => s_Captures.Count;
+        public static int HotspotCount => s_Hotspots.Count;
 
         public static TrafficCapture Last => s_Captures.Count > 0 ? s_Captures[s_Captures.Count - 1] : null;
 
