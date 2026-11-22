@@ -13,22 +13,26 @@ In the base game, drivers only learn very slowly (over game days) which roads ar
 - Re-routing while driving: cars, delivery trucks (including semi-trailers) and taxis re-plan mid-trip when their route gets much slower, using the game's own re-routing. Buses and other public transport keep to their lines.
 - Simple presets: Relaxed, Balanced (recommended) and Eager. Picking one fills in the sliders; tweak any slider for your own mix.
 
-**Tested results (Balanced vs the mod off, same save, same game hours)**
+**Tested results (one 100k city, Balanced vs the mod off, same save, same game hours; your city will differ with its road network)**
 - About 28% fewer vehicles waiting in queues
 - About 87% fewer jam warnings on the map
 - Real driving speed up about 3%
 - Only slightly more traffic on local streets (about 10%)
-- No measurable slowdown at the fastest game speed: the mod itself uses about 1% of one CPU core and about 5 MB of memory in a 100k city
+- No measurable slowdown at the fastest game speed: the mod itself uses about 1% of one CPU core and about 5 MB of memory (tested in a 100k city)
 
 Eager pushes harder (queues down about 38%) but sends noticeably more traffic through neighbourhoods. Relaxed is a light touch.
 
 **For traffic geeks (optional, off by default)**
-Turn on **Statistics panel** in the options to get a traffic icon in the game with a Live Traffic panel: how traffic is doing right now, the busiest streets and junctions (click one to jump there), charts per hour of the day, why the cars in queues are on the road, the mod's cost, and side-by-side comparisons between the mod off and different settings, with a check of whether a difference is real or just the simulation's randomness. Every game hour is saved to ModsData/LiveTrafficRouting/captures.csv for your own spreadsheets.
+Turn on **Statistics panel** in the options to get a traffic icon in the game with a Live Traffic panel: how traffic is doing right now, the busiest streets and junctions (click one to jump there), charts per hour of the day, why the cars in queues are on the road, the mod's cost, and side-by-side comparisons between the mod off and different settings, with a check of whether a difference is real or just the simulation's randomness. Every game hour is saved to ModsData/LiveTrafficRouting/captures.csv for your own spreadsheets. You choose how long statistics are kept (1 game month to unlimited), and while recording, milestone popups don't pause your test. With the panel off, nothing is recorded.
+
+**Feedback welcome**
+Especially from big cities (250k+) and players using other traffic mods. Please report bugs and share results at https://github.com/Yhanli/LiveTrafficRouting/issues. If traffic looks off, turn on **Statistics panel** and **Write traffic report to log**, and attach a screenshot of the Compare or Cost tab and Logs/LiveTrafficRouting.log: that shows exactly what the mod did in your city.
 
 **Good to know**
 - Nothing is stored in your save. You can turn the mod off (Options) or remove it at any time; the game's own traffic behaviour comes straight back.
 - The mod replaces the game's traffic flow system (the traffic flow info view works as before). Other mods that also replace it may not work together with this one.
 - Service vehicles (garbage, police, fire, ambulance and so on) are not re-routed mid-trip.
+- Live traffic can only help where another route exists. If every route ends in the same queue (one highway exit, one entrance to a cargo yard), drivers have nowhere to go: build a second connection. The Hotspots tab in the statistics panel shows where the queues are.
 - Settings texts are in English.
 	</LongDescription>
 	<Thumbnail Value="Properties/Thumbnail.png" />
@@ -44,7 +48,7 @@ Turn on **Statistics panel** in the options to get a traffic icon in the game wi
 	<Screenshot Value="Properties/Screenshots/7-runs.jpg" />
 	<Screenshot Value="Properties/Screenshots/8-options.jpg" />
 	<Tag Value="Code Mod" />
-	<ForumLink Value="" />
+	<ForumLink Value="https://github.com/Yhanli/LiveTrafficRouting/issues" />
 	<ModVersion Value="1.0.0" />
 	<GameVersion Value="1.6.*" />
 	<Dependency Id="" />
@@ -53,5 +57,6 @@ Turn on **Statistics panel** in the options to get a traffic icon in the game wi
 First release: live traffic routing, re-routing while driving for cars, delivery trucks and taxis, presets (Relaxed, Balanced, Eager), and an optional statistics panel for traffic geeks.
 	</ChangeLog>
 	<!--Private while testing the upload; switch to Public to release.-->
+	<ExternalLink Type="github" Url="https://github.com/Yhanli/LiveTrafficRouting" />
 	<AccessLevel Value="Private" />
 </Publish>

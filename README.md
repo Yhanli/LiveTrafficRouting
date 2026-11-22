@@ -126,6 +126,11 @@ If a run records the same game hour twice, the latest recording counts.
 
 The mod adds nothing to save files. It can be removed at any time.
 
+## Feedback and bugs
+
+Please use [GitHub issues](https://github.com/Yhanli/LiveTrafficRouting/issues). For "traffic got worse" or performance reports, the statistics panel's
+Compare / Cost / Hotspots tabs and `Logs/LiveTrafficRouting.log` show exactly what happened (see the issue template).
+
 ## Build
 
 ```powershell
@@ -147,3 +152,8 @@ Close the game first. The build deploys to `%USERPROFILE%\AppData\LocalLow\Colos
 6. Re-routing: the log also gets "Re-routing: ... car checks, ... re-routes ... found a faster route (avg X% of the remaining
    trip time saved), ... got no better route". Watch for cars braking or stopping mid-road right after a re-route; they should
    keep driving smoothly.
+
+## License
+
+MIT (see `LICENSE`). The `UI/types` declarations come from the game's own UI mod template. No game code is included:
+decompiled game code used for research stays outside this repository.
