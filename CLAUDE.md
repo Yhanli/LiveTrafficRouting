@@ -1,6 +1,6 @@
 # Live Traffic Routing: notes for Claude
 
-Cities: Skylines II **code mod** (C#, Unity ECS). Goal: congestion-aware routing based on live traffic
+Cities: Skylines II **code mod**, published on Paradox Mods as **ModId 168683** (C#, Unity ECS). Goal: congestion-aware routing based on live traffic
 ("navigation app" behaviour). Don't use "Google" or "Google Maps" in the mod name or description (trademark).
 
 ## Layout
