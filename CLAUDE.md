@@ -57,7 +57,7 @@ Cities: Skylines II **code mod** (C#, Unity ECS). Goal: congestion-aware routing
 ## Git
 
 - `origin` = https://github.com/Yhanli/LiveTrafficRouting (branch `main`). Feedback and bugs go to its issues
-  (linked from the mod page's ForumLink and the README).
+  (linked from the mod page description and the README; ForumLink only accepts a Paradox forum url).
 - This repo's `user.email` is the GitHub noreply address; GitHub rejects pushes that expose the private email, so don't
   change it. The local branch `backup/before-email-rewrite` still has the old address: never push it (push `main` only).
 - `git push` from the agent shell can't prompt for credentials; the user pushes from a terminal where Git Credential

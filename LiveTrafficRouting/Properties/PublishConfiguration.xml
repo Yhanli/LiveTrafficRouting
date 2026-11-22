@@ -48,7 +48,7 @@ Especially from big cities (250k+) and players using other traffic mods. Please 
 	<Screenshot Value="Properties/Screenshots/7-runs.jpg" />
 	<Screenshot Value="Properties/Screenshots/8-options.jpg" />
 	<Tag Value="Code Mod" />
-	<ForumLink Value="https://github.com/Yhanli/LiveTrafficRouting/issues" />
+	<ForumLink Value="" />
 	<ModVersion Value="1.0.0" />
 	<GameVersion Value="1.6.*" />
 	<Dependency Id="" />

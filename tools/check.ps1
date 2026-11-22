@@ -37,6 +37,9 @@ if ($config) {
     foreach ($field in 'DisplayName', 'ShortDescription', 'ModVersion', 'GameVersion', 'Thumbnail') {
         if ([string]::IsNullOrWhiteSpace($p.$field.Value)) { Fail $configRel "<$field Value=...> is empty" }
     }
+    # Paradox Mods only accepts a Paradox forum address here (GitHub goes in <ExternalLink Type="github">).
+    $forum = $p.ForumLink.Value
+    if ($forum -and $forum -notmatch '^https://forum\.paradoxplaza\.com/') { Fail $configRel "ForumLink must be a Paradox forum url (or empty), not '$forum'" }
     if ($p.ModVersion.Value -notmatch '^\d+\.\d+\.\d+$') { Fail $configRel "ModVersion '$($p.ModVersion.Value)' must look like 1.2.3" }
     else { Pass "ModVersion $($p.ModVersion.Value)" }
 
