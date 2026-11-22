@@ -53,3 +53,13 @@ Cities: Skylines II **code mod** (C#, Unity ECS). Goal: congestion-aware routing
   PublishConfiguration.xml) and PublishNewVersion afterwards, and tags the commit. AccessLevel is Private until release.
 - Images: `tools\make-thumbnail.ps1` and `tools\make-explainers.ps1` (run with `powershell.exe -STA`), and
   `tools\convert-screenshots.ps1` for in-game screenshots (to JPG).
+
+## Git
+
+- `origin` = https://github.com/Yhanli/LiveTrafficRouting (branch `main`). Feedback and bugs go to its issues
+  (linked from the mod page's ForumLink and the README).
+- This repo's `user.email` is the GitHub noreply address; GitHub rejects pushes that expose the private email, so don't
+  change it. The local branch `backup/before-email-rewrite` still has the old address: never push it (push `main` only).
+- `git push` from the agent shell can't prompt for credentials; the user pushes from a terminal where Git Credential
+  Manager is signed in.
+- Commit only when the user asks.
