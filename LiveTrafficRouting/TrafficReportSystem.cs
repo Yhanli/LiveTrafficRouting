@@ -277,9 +277,12 @@ namespace LiveTrafficRouting
                     places.TryGetValue(destination, out int n);
                     places[destination] = n + 1;
 
+                    // A shop is a company renting a building: the position is the building's.
+                    Entity destBuilding = destination;
+                    if (m_PropertyRenterData.TryGetComponent(destination, out PropertyRenter shopRenter)) destBuilding = shopRenter.m_Property;
                     if (home != Entity.Null &&
                         m_TransformData.TryGetComponent(home, out Transform homeTransform) &&
-                        m_TransformData.TryGetComponent(destination, out Transform destTransform))
+                        m_TransformData.TryGetComponent(destBuilding, out Transform destTransform))
                     {
                         m_Stats[slot + 1] += math.distance(homeTransform.m_Position.xz, destTransform.m_Position.xz);
                         m_Stats[slot + 2] += 1;
