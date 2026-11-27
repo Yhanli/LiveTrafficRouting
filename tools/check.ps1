@@ -51,7 +51,15 @@ if ($config) {
 
     $images = @($p.Thumbnail.Value) + @($p.Screenshot | ForEach-Object { $_.Value }) | Where-Object { $_ }
     $shots = @($p.Screenshot | ForEach-Object { $_.Value } | Where-Object { $_ })
+    # Paradox Mods' upload rules (from its error message on 2026-11-27): at most 10 screenshots, each a .jpg/.jpeg/.png
+    # whose name is at most 128 characters; every image under 2.1 MB.
     if ($shots.Count -gt 10) { Fail $configRel "$($shots.Count) screenshots: Paradox Mods accepts at most 10" }
+    else { Pass "$($shots.Count) screenshots (Paradox Mods accepts at most 10)" }
+    foreach ($shot in $shots) {
+        $name = Split-Path $shot -Leaf
+        if ($name -notmatch '\.(jpe?g|png)$') { Fail $configRel "Screenshot '$name' must be .jpg, .jpeg or .png" }
+        if ($name.Length -gt 128) { Fail $configRel "Screenshot name '$name' is longer than 128 characters" }
+    }
     foreach ($image in $images) {
         $file = Join-Path $projectDir $image
         if (-not (Test-Path $file)) { Fail $configRel "Image not found: $image"; continue }

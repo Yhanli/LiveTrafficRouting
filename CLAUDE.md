@@ -127,6 +127,7 @@ same turn, briefly.
   not the game's sign-in; Paradox refuses an account whose email is not verified (fix it in the Paradox account
   settings). Paradox Mods accepts **at most 10 screenshots** (`check.ps1` checks). After a successful upload the mod
   shows "pending publication" for a few minutes. The script pushes the tag; the user pushes `main`.
+  Go through `docs/releases/CHECKLIST.md` before every publish.
 - Images: `tools\make-thumbnail.ps1` and `tools\make-explainers.ps1` (run with `powershell.exe -STA`), and
   `tools\convert-screenshots.ps1` for in-game screenshots (to JPG).
 

@@ -177,6 +177,11 @@ How it reads the game is in research.md section 8. The choices:
   `ExternalLink`.
 - **The mod page says "navigation app"**, never the trademarked name; `tools/check.ps1` enforces it.
 - **Publish and commit only when asked**: both act under the user's own accounts.
+- **Paradox Mods limits, learned by failed uploads** (1.1.0, 2026-11-27): at most 10 screenshots, each .jpg / .jpeg /
+  .png with a name of 128 characters or less, each image under 2.1 MB (all checked by `tools\check.ps1`). The upload
+  signs in through Steam (the Paradox account linked to the Steam account on this PC, not the game's sign-in) and is
+  refused while that account's email is not verified: check the email in the Paradox account settings before a
+  release. Adding screenshots means dropping others (1.1 dropped Runs and Options for the two Causes shots).
 - **Everything after 1.0.0 is one release, 1.1.0** (2026-11-27): the planned 1.2 (bottleneck finder) was folded into
   1.1, since none of it was published. Draft and checklist: `docs/releases/v1.1.0.md`.
 
