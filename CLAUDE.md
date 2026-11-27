@@ -21,8 +21,8 @@ same turn, briefly.
 - **Don't flood the player:** thresholds, rankings over time, and suggestions tied to a real problem (they go away
   when it's fixed). Show when a fix worked.
 - **Record decisions** in `docs/decisions.md` (by topic, with date or version) and game facts in `docs/research.md`.
-- **Versions:** everything after 1.0.0 is 1.1.0 until it is published. Commit only when asked; never push (the user
-  pushes from their own terminal); publish only when asked.
+- **Versions:** everything after 1.0.0 is 1.1.0 until it is published, on branch `release/1.1.0`. Commit only when
+  asked; never push (the user pushes from their own terminal); publish only when asked.
 
 ## Game data gotchas (each one cost a wrong result once)
 
@@ -126,7 +126,11 @@ same turn, briefly.
 - `origin` = https://github.com/Yhanli/LiveTrafficRouting (branch `main`). Feedback and bugs go to its issues
   (linked from the mod page description and the README; ForumLink only accepts a Paradox forum url).
 - This repo's `user.email` is the GitHub noreply address; GitHub rejects pushes that expose the private email, so don't
-  change it. The local branch `backup/before-email-rewrite` still has the old address: never push it (push `main` only).
+  change it. The local branch `backup/before-email-rewrite` still has the old address: never push it.
+- **Release branches:** `main` matches the published version. Work for the next version goes on `release/X.Y.Z`
+  (currently `release/1.1.0`), a few commits grouped by area; the user pushes the branch and opens a pull request into
+  `main` (the CI check runs on it; `gh` is not installed here). Merge when ready to publish, then run
+  `tools\publish.ps1` from `main` so the version tag sits on `main`. Never rewrite commits that are already pushed.
 - `git push` from the agent shell can't prompt for credentials; the user pushes from a terminal where Git Credential
   Manager is signed in.
 - Commit only when the user asks.
