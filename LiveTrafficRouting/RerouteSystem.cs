@@ -19,6 +19,12 @@ using VehicleLaneFlags = Game.Vehicles.CarLaneFlags;
 using PersonalCar = Game.Vehicles.PersonalCar;
 using DeliveryTruck = Game.Vehicles.DeliveryTruck;
 using Taxi = Game.Vehicles.Taxi;
+using Ambulance = Game.Vehicles.Ambulance;
+using FireEngine = Game.Vehicles.FireEngine;
+using PoliceCar = Game.Vehicles.PoliceCar;
+using Owner = Game.Common.Owner;
+using EdgeLane = Game.Net.EdgeLane;
+using ConnectedEdge = Game.Net.ConnectedEdge;
 using PedestrianLane = Game.Net.PedestrianLane;
 using Curve = Game.Net.Curve;
 
@@ -34,8 +40,12 @@ namespace LiveTrafficRouting
     /// then requests a new path from the vehicle's position to the same destination.
     ///
     /// Covered: personal cars, delivery trucks and taxis, including through-traffic and vehicles with trailers
-    /// (trailers follow the lead vehicle's lanes). Not covered: public transport (fixed lines and stops) and
-    /// service vehicles (not reviewed yet).
+    /// (trailers follow the lead vehicle's lanes), and ambulances, fire engines and police cars on an emergency run
+    /// (always, with their own budget: dispatch has live traffic). Not covered: public transport (fixed lines and
+    /// stops) and other service vehicles (their routes run through several stops).
+    ///
+    /// A re-route because the way ahead got slower waits until a junction with a real choice is coming up, so the new
+    /// search can actually find another way. The number of re-routes per run follows how busy the pathfinder is.
     ///
     /// All state is in memory only; nothing is written to the save.
     /// </summary>
@@ -49,8 +59,16 @@ namespace LiveTrafficRouting
         // doubles (up to 8x, ~3 game hours), and it resets once a re-plan finds a faster route.
         private const uint kCooldownFrames = 4096;
         private const int kMaxBackoffLevel = 3;
-        // At most this many re-plans per run (~every 21 game seconds), to keep the pathfind queue light.
-        private const int kMaxReroutesPerRun = 64;
+        // Re-plans per run (~every 21 game seconds): 64 normally, from 8 (pathfinder busy) up to 128 (idle).
+        private const int kMaxReroutesPerRun = 128;
+        private const int kMinReroutesPerRun = 8;
+        // Emergency vehicles have their own budget, so they never wait behind cars.
+        private const int kEmergencyReroutesPerRun = 16;
+        // A junction with at least this many roads within this many path elements counts as a choice ahead.
+        private const int kJunctionLookAhead = 8;
+        private const int kJunctionMinEdges = 3;
+        // A stopped car this far along its road lane is waiting at the stop line of the junction ahead.
+        private const float kStopLineCurvePosition = 0.9f;
         // The extra delay must be at least this much drive time (seconds at the speed limit)...
         private const float kMinExtraSeconds = 20f;
         // ...and the rest of the trip at least this long, or re-planning isn't worth it.
@@ -77,12 +95,17 @@ namespace LiveTrafficRouting
             public Entity m_Car;
             public float m_OldSeconds;
             public int m_Attempts;
+            public bool m_Jam; // triggered by rule (b), standing jam
         }
 
         // [0] cars checked, [1] re-routes, [2] re-routes evaluated, [3] of those found a faster route,
         // [4] sum of time saved (fraction of old remaining time, faster routes only), [5] skipped by the per-run cap,
-        // [6] re-routes by trucks, [7] re-routes by taxis
-        private const int kStatCount = 8;
+        // [6] re-routes by trucks, [7] re-routes by taxis, [8] re-routes waiting for a junction ahead,
+        // [9] re-routes by emergency vehicles, [10] sum of the per-run budget, [11] runs (for the average budget),
+        // [12] re-routes whose new path failed (the game removes such a car), [13] re-routed cars removed before the
+        // new path came back, [14] re-routes by rule (b) standing jam, [15] of those evaluated, [16] of those faster,
+        // [17] re-routes skipped because the car is in a junction or waiting first in line at one
+        internal const int kStatCount = 18;
 
         [BurstCompile]
         private struct CheckCarsJob : IJobChunk
@@ -91,6 +114,10 @@ namespace LiveTrafficRouting
             [ReadOnly] public ComponentTypeHandle<PersonalCar> m_PersonalCarType;
             [ReadOnly] public ComponentTypeHandle<DeliveryTruck> m_DeliveryTruckType;
             [ReadOnly] public ComponentTypeHandle<Taxi> m_TaxiType;
+            [ReadOnly] public ComponentTypeHandle<Ambulance> m_AmbulanceType;
+            [ReadOnly] public ComponentTypeHandle<FireEngine> m_FireEngineType;
+            [ReadOnly] public ComponentTypeHandle<PoliceCar> m_PoliceCarType;
+            [ReadOnly] public ComponentTypeHandle<Car> m_CarType;
             [ReadOnly] public ComponentTypeHandle<Moving> m_MovingType;
             [ReadOnly] public ComponentTypeHandle<PrefabRef> m_PrefabRefType;
             [ReadOnly] public ComponentTypeHandle<Controller> m_ControllerType;
@@ -104,6 +131,9 @@ namespace LiveTrafficRouting
             [ReadOnly] public ComponentLookup<PedestrianLane> m_PedestrianLaneData;
             [ReadOnly] public ComponentLookup<Curve> m_CurveData;
             [ReadOnly] public ComponentLookup<CarData> m_PrefabCarData;
+            [ReadOnly] public ComponentLookup<EdgeLane> m_EdgeLaneData;
+            [ReadOnly] public ComponentLookup<Owner> m_OwnerData;
+            [ReadOnly] public BufferLookup<ConnectedEdge> m_ConnectedEdges;
 
             public NativeParallelHashMap<Entity, CarState> m_Cars;
             public NativeList<PendingCheck> m_Pending;
@@ -120,8 +150,12 @@ namespace LiveTrafficRouting
                 NativeArray<PersonalCar> personalCars = chunk.GetNativeArray(ref m_PersonalCarType);
                 NativeArray<DeliveryTruck> trucks = chunk.GetNativeArray(ref m_DeliveryTruckType);
                 NativeArray<Taxi> taxis = chunk.GetNativeArray(ref m_TaxiType);
-                // 0 = personal car, 1 = delivery truck, 2 = taxi
-                int kind = personalCars.Length != 0 ? 0 : trucks.Length != 0 ? 1 : 2;
+                // 0 = personal car, 1 = delivery truck, 2 = taxi, 3 = emergency vehicle
+                int kind = personalCars.Length != 0 ? 0 : trucks.Length != 0 ? 1 : taxis.Length != 0 ? 2 : 3;
+                NativeArray<Ambulance> ambulances = chunk.GetNativeArray(ref m_AmbulanceType);
+                NativeArray<FireEngine> fireEngines = chunk.GetNativeArray(ref m_FireEngineType);
+                NativeArray<PoliceCar> policeCars = chunk.GetNativeArray(ref m_PoliceCarType);
+                NativeArray<Car> cars = chunk.GetNativeArray(ref m_CarType);
                 NativeArray<Moving> movings = chunk.GetNativeArray(ref m_MovingType);
                 NativeArray<PrefabRef> prefabRefs = chunk.GetNativeArray(ref m_PrefabRefType);
                 NativeArray<Controller> controllers = chunk.GetNativeArray(ref m_ControllerType);
@@ -135,10 +169,15 @@ namespace LiveTrafficRouting
                 {
                     Entity car = entities[i];
 
-                    // Only drivers who "have live navigation": a fixed share of cars, decided per car.
-                    if (!NavigationGroup.Has(car, m_SharePercent)) continue;
+                    // Only drivers who "have live navigation": a fixed share of cars, decided per car. Emergency
+                    // vehicles always have it.
+                    if (kind != 3 && !NavigationGroup.Has(car, m_SharePercent)) continue;
 
-                    if (!IsDriving(kind, personalCars, trucks, taxis, i)) continue;
+                    if (kind == 3)
+                    {
+                        if (!IsOnEmergencyRun(ambulances, fireEngines, policeCars, cars, i)) continue;
+                    }
+                    else if (!IsDriving(kind, personalCars, trucks, taxis, i)) continue;
 
                     // Only the lead vehicle has a route; trailers follow its lanes.
                     if (controllers.Length != 0 && controllers[i].m_Controller != car && controllers[i].m_Controller != Entity.Null) continue;
@@ -157,6 +196,10 @@ namespace LiveTrafficRouting
                     if ((currentLane.m_LaneFlags & special) != 0) continue;
                     if (currentLane.m_ChangeLane != Entity.Null) continue;
                     if (!m_CarLaneData.HasComponent(currentLane.m_Lane)) continue;
+                    // Inside a junction, or stopped first in line at its entrance: drive through, don't re-plan. A car
+                    // waiting for its new path can stop at the end of its lane and hold up everyone behind it.
+                    bool atJunction = !m_EdgeLaneData.HasComponent(currentLane.m_Lane) ||
+                                      (currentLane.m_CurvePosition.x >= kStopLineCurvePosition && math.lengthsq(movings[i].m_Velocity) < 1f);
 
                     DynamicBuffer<PathElement> path = pathElements[i];
                     if (path.Length == 0 || pathOwner.m_ElementIndex >= path.Length) continue;
@@ -193,13 +236,29 @@ namespace LiveTrafficRouting
                         m_Cars[car] = state;
                         continue;
                     }
-                    if (m_RunBudget[0] <= 0)
+                    if (atJunction)
+                    {
+                        m_Stats[17] += 1f;
+                        m_Cars[car] = state;
+                        continue;
+                    }
+                    // Slower way ahead but no junction with a choice coming up: a new search would find the same road.
+                    // Wait for the junction (no cooldown used). This holds for a standing jam too (v1.1): a car in a
+                    // queue with no turn-off before the slow part ends can only stay in it.
+                    if (!HasChoiceAhead(path, pathOwner.m_ElementIndex))
+                    {
+                        m_Stats[8] += 1f;
+                        m_Cars[car] = state;
+                        continue;
+                    }
+                    int budgetSlot = kind == 3 ? 1 : 0;
+                    if (m_RunBudget[budgetSlot] <= 0)
                     {
                         m_Stats[5] += 1f;
                         m_Cars[car] = state;
                         continue;
                     }
-                    m_RunBudget[0]--;
+                    m_RunBudget[budgetSlot]--;
 
                     // The same steps the game takes when a car's path becomes invalid.
                     CarData carData = m_PrefabCarData[prefabRefs[i].m_Prefab];
@@ -215,11 +274,60 @@ namespace LiveTrafficRouting
                     state.m_LastReroute = m_Frame;
                     state.m_PathSignature = 0;
                     m_Cars[car] = state;
-                    m_Pending.Add(new PendingCheck { m_Car = car, m_OldSeconds = seconds });
+                    bool jamRule = inStandingJam && !gotWorse;
+                    m_Pending.Add(new PendingCheck { m_Car = car, m_OldSeconds = seconds, m_Jam = jamRule });
                     m_Stats[1] += 1f;
+                    if (jamRule) m_Stats[14] += 1f;
                     if (kind == 1) m_Stats[6] += 1f;
                     if (kind == 2) m_Stats[7] += 1f;
+                    if (kind == 3) m_Stats[9] += 1f;
                 }
+            }
+
+            /// <summary>
+            /// Whether a junction with a real choice (three or more roads) comes up within the next few path elements.
+            /// Junction lanes are the lanes inside a node: no EdgeLane, owned by the node.
+            /// </summary>
+            private bool HasChoiceAhead(DynamicBuffer<PathElement> path, int start)
+            {
+                int end = math.min(path.Length, start + kJunctionLookAhead);
+                for (int k = math.max(0, start); k < end; k++)
+                {
+                    Entity lane = path[k].m_Target;
+                    if (m_EdgeLaneData.HasComponent(lane)) continue;
+                    if (!m_OwnerData.TryGetComponent(lane, out Owner owner)) continue;
+                    if (m_ConnectedEdges.TryGetBuffer(owner.m_Owner, out DynamicBuffer<ConnectedEdge> edges) && edges.Length >= kJunctionMinEdges)
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            /// <summary>Ambulances, fire engines and police cars on their way to an emergency, with lights on.</summary>
+            private static bool IsOnEmergencyRun(NativeArray<Ambulance> ambulances, NativeArray<FireEngine> fireEngines,
+                NativeArray<PoliceCar> policeCars, NativeArray<Car> cars, int i)
+            {
+                if (cars.Length == 0 || (cars[i].m_Flags & CarFlags.Emergency) == 0) return false;
+                if (ambulances.Length != 0)
+                {
+                    const AmbulanceFlags busy = AmbulanceFlags.Returning | AmbulanceFlags.AtTarget | AmbulanceFlags.Disembarking |
+                                                AmbulanceFlags.Disabled | AmbulanceFlags.FindHospital;
+                    return (ambulances[i].m_State & busy) == 0;
+                }
+                if (fireEngines.Length != 0)
+                {
+                    const FireEngineFlags busy = FireEngineFlags.Returning | FireEngineFlags.Extinguishing | FireEngineFlags.Rescueing |
+                                                 FireEngineFlags.Disabled | FireEngineFlags.Empty;
+                    return (fireEngines[i].m_State & busy) == 0;
+                }
+                if (policeCars.Length != 0)
+                {
+                    const PoliceCarFlags busy = PoliceCarFlags.Returning | PoliceCarFlags.AtTarget | PoliceCarFlags.Disembarking |
+                                                PoliceCarFlags.Disabled | PoliceCarFlags.Cancelled | PoliceCarFlags.ShiftEnded;
+                    return (policeCars[i].m_State & busy) == 0;
+                }
+                return false;
             }
 
             /// <summary>Whether the vehicle is simply on its way somewhere (not loading, boarding, parking...).</summary>
@@ -271,18 +379,30 @@ namespace LiveTrafficRouting
             public NativeList<PendingCheck> m_Pending;
             public NativeArray<float> m_Stats;
             public NativeArray<int> m_RunBudget;
-            public int m_MaxReroutes;
+            // [0] smoothed share of re-plans still waiting for their path one run later (how busy the pathfinder is)
+            public NativeArray<float> m_Load;
 
             public void Execute()
             {
-                m_RunBudget[0] = m_MaxReroutes;
+                int checkedNow = 0;
+                int stillWaiting = 0;
                 for (int i = m_Pending.Length - 1; i >= 0; i--)
                 {
                     PendingCheck check = m_Pending[i];
                     bool done = true;
-                    if (m_PathOwnerData.TryGetComponent(check.m_Car, out PathOwner owner) && m_PathElements.TryGetBuffer(check.m_Car, out DynamicBuffer<PathElement> path))
+                    if (!m_PathOwnerData.HasComponent(check.m_Car))
                     {
+                        m_Stats[13] += 1f;
+                    }
+                    else if (m_PathOwnerData.TryGetComponent(check.m_Car, out PathOwner owner) && m_PathElements.TryGetBuffer(check.m_Car, out DynamicBuffer<PathElement> path))
+                    {
+                        if (!((owner.m_State & (PathFlags.Pending | PathFlags.Obsolete)) != 0) && (owner.m_State & PathFlags.Failed) != 0) m_Stats[12] += 1f;
                         bool waiting = (owner.m_State & (PathFlags.Pending | PathFlags.Obsolete)) != 0 || path.Length == 0;
+                        if (check.m_Attempts == 0)
+                        {
+                            checkedNow++;
+                            if (waiting) stillWaiting++;
+                        }
                         if (waiting && check.m_Attempts < 4)
                         {
                             check.m_Attempts++;
@@ -295,6 +415,11 @@ namespace LiveTrafficRouting
                             float saved = (check.m_OldSeconds - seconds) / math.max(1f, check.m_OldSeconds);
                             m_Stats[2] += 1f;
                             bool better = saved >= kBetterRouteMargin;
+                            if (check.m_Jam)
+                            {
+                                m_Stats[15] += 1f;
+                                if (better) m_Stats[16] += 1f;
+                            }
                             if (m_Cars.TryGetValue(check.m_Car, out CarState state))
                             {
                                 state.m_BackoffLevel = better ? 0 : math.min(state.m_BackoffLevel + 1, kMaxBackoffLevel);
@@ -309,6 +434,19 @@ namespace LiveTrafficRouting
                     }
                     if (done) m_Pending.RemoveAtSwapBack(i);
                 }
+
+                // Budget: most new paths back within one run means the pathfinder has room (up to 128); many still
+                // waiting means it is busy (down to 8). 64 when 30% are still waiting.
+                if (checkedNow > 0)
+                {
+                    m_Load[0] = math.lerp(m_Load[0], (float)stillWaiting / checkedNow, 0.25f);
+                }
+                float busy = math.saturate((m_Load[0] - 0.1f) / 0.4f);
+                int budget = (int)math.round(math.lerp(kMaxReroutesPerRun, kMinReroutesPerRun, busy));
+                m_RunBudget[0] = budget;
+                m_RunBudget[1] = kEmergencyReroutesPerRun;
+                m_Stats[10] += budget;
+                m_Stats[11] += 1f;
             }
         }
 
@@ -336,6 +474,10 @@ namespace LiveTrafficRouting
         private ComponentTypeHandle<PersonalCar> m_PersonalCarType;
         private ComponentTypeHandle<DeliveryTruck> m_DeliveryTruckType;
         private ComponentTypeHandle<Taxi> m_TaxiType;
+        private ComponentTypeHandle<Ambulance> m_AmbulanceType;
+        private ComponentTypeHandle<FireEngine> m_FireEngineType;
+        private ComponentTypeHandle<PoliceCar> m_PoliceCarType;
+        private ComponentTypeHandle<Car> m_CarType;
         private ComponentTypeHandle<Moving> m_MovingType;
         private ComponentTypeHandle<PrefabRef> m_PrefabRefType;
         private ComponentTypeHandle<Controller> m_ControllerType;
@@ -350,6 +492,10 @@ namespace LiveTrafficRouting
         private ComponentLookup<CarData> m_PrefabCarData;
         private ComponentLookup<PathOwner> m_PathOwnerData;
         private BufferLookup<PathElement> m_PathElementData;
+        private ComponentLookup<EdgeLane> m_EdgeLaneData;
+        private ComponentLookup<Owner> m_OwnerData;
+        private BufferLookup<ConnectedEdge> m_ConnectedEdges;
+        private NativeArray<float> m_Load;
 
         private NativeParallelHashMap<Entity, CarState> m_Cars;
         private NativeList<PendingCheck> m_Pending;
@@ -372,6 +518,9 @@ namespace LiveTrafficRouting
                     ComponentType.ReadOnly<PersonalCar>(),
                     ComponentType.ReadOnly<DeliveryTruck>(),
                     ComponentType.ReadOnly<Taxi>(),
+                    ComponentType.ReadOnly<Ambulance>(),
+                    ComponentType.ReadOnly<FireEngine>(),
+                    ComponentType.ReadOnly<PoliceCar>(),
                 },
                 All = new[]
                 {
@@ -395,6 +544,10 @@ namespace LiveTrafficRouting
             m_PersonalCarType = GetComponentTypeHandle<PersonalCar>(true);
             m_DeliveryTruckType = GetComponentTypeHandle<DeliveryTruck>(true);
             m_TaxiType = GetComponentTypeHandle<Taxi>(true);
+            m_AmbulanceType = GetComponentTypeHandle<Ambulance>(true);
+            m_FireEngineType = GetComponentTypeHandle<FireEngine>(true);
+            m_PoliceCarType = GetComponentTypeHandle<PoliceCar>(true);
+            m_CarType = GetComponentTypeHandle<Car>(true);
             m_MovingType = GetComponentTypeHandle<Moving>(true);
             m_PrefabRefType = GetComponentTypeHandle<PrefabRef>(true);
             m_ControllerType = GetComponentTypeHandle<Controller>(true);
@@ -409,11 +562,15 @@ namespace LiveTrafficRouting
             m_PrefabCarData = GetComponentLookup<CarData>(true);
             m_PathOwnerData = GetComponentLookup<PathOwner>(true);
             m_PathElementData = GetBufferLookup<PathElement>(true);
+            m_EdgeLaneData = GetComponentLookup<EdgeLane>(true);
+            m_OwnerData = GetComponentLookup<Owner>(true);
+            m_ConnectedEdges = GetBufferLookup<ConnectedEdge>(true);
+            m_Load = new NativeArray<float>(1, Allocator.Persistent);
 
             m_Cars = new NativeParallelHashMap<Entity, CarState>(8192, Allocator.Persistent);
             m_Pending = new NativeList<PendingCheck>(256, Allocator.Persistent);
             m_Stats = new NativeArray<float>(kStatCount, Allocator.Persistent);
-            m_RunBudget = new NativeArray<int>(1, Allocator.Persistent);
+            m_RunBudget = new NativeArray<int>(2, Allocator.Persistent);
 
             RequireForUpdate(m_CarQuery);
             Logger.Info("RerouteSystem created.");
@@ -426,6 +583,7 @@ namespace LiveTrafficRouting
             m_Pending.Dispose();
             m_Stats.Dispose();
             m_RunBudget.Dispose();
+            m_Load.Dispose();
             base.OnDestroy();
         }
 
@@ -453,6 +611,10 @@ namespace LiveTrafficRouting
             m_PersonalCarType.Update(this);
             m_DeliveryTruckType.Update(this);
             m_TaxiType.Update(this);
+            m_AmbulanceType.Update(this);
+            m_FireEngineType.Update(this);
+            m_PoliceCarType.Update(this);
+            m_CarType.Update(this);
             m_MovingType.Update(this);
             m_PrefabRefType.Update(this);
             m_ControllerType.Update(this);
@@ -467,6 +629,9 @@ namespace LiveTrafficRouting
             m_PrefabCarData.Update(this);
             m_PathOwnerData.Update(this);
             m_PathElementData.Update(this);
+            m_EdgeLaneData.Update(this);
+            m_OwnerData.Update(this);
+            m_ConnectedEdges.Update(this);
 
             JobHandle dependency = JobHandle.CombineDependencies(Dependency, m_LastJob);
             System.Diagnostics.Stopwatch timer = null;
@@ -487,7 +652,7 @@ namespace LiveTrafficRouting
                 m_Pending = m_Pending,
                 m_Stats = m_Stats,
                 m_RunBudget = m_RunBudget,
-                m_MaxReroutes = kMaxReroutesPerRun,
+                m_Load = m_Load,
             }.Schedule(dependency);
 
             if (frame >= m_NextPruneFrame)
@@ -496,8 +661,8 @@ namespace LiveTrafficRouting
                 m_NextPruneFrame = frame + 32768;
             }
 
+            // Emergency vehicles re-route even when no driver has live navigation.
             uint sharePercent = NavigationGroup.SharePercent(share);
-            if (sharePercent > 0)
             {
                 uint group = (frame / kUpdateInterval) % kGroupCount;
                 m_CarQuery.ResetFilter();
@@ -509,6 +674,10 @@ namespace LiveTrafficRouting
                     m_PersonalCarType = m_PersonalCarType,
                     m_DeliveryTruckType = m_DeliveryTruckType,
                     m_TaxiType = m_TaxiType,
+                    m_AmbulanceType = m_AmbulanceType,
+                    m_FireEngineType = m_FireEngineType,
+                    m_PoliceCarType = m_PoliceCarType,
+                    m_CarType = m_CarType,
                     m_MovingType = m_MovingType,
                     m_PrefabRefType = m_PrefabRefType,
                     m_ControllerType = m_ControllerType,
@@ -521,6 +690,9 @@ namespace LiveTrafficRouting
                     m_PedestrianLaneData = m_PedestrianLaneData,
                     m_CurveData = m_CurveData,
                     m_PrefabCarData = m_PrefabCarData,
+                    m_EdgeLaneData = m_EdgeLaneData,
+                    m_OwnerData = m_OwnerData,
+                    m_ConnectedEdges = m_ConnectedEdges,
                     m_Cars = m_Cars,
                     m_Pending = m_Pending,
                     m_Stats = m_Stats,
@@ -542,7 +714,7 @@ namespace LiveTrafficRouting
         }
 
         /// <summary>
-        /// Re-routing counters since the last call (see kStatCount for the layout) plus [8] vehicles tracked.
+        /// Re-routing counters since the last call (see kStatCount for the layout) plus [kStatCount] vehicles tracked.
         /// Resets the counters.
         /// </summary>
         internal void HarvestStats(float[] into)
@@ -566,16 +738,28 @@ namespace LiveTrafficRouting
             int end = math.min(path.Length, start + maxElements);
             for (int i = math.max(0, start); i < end; i++)
             {
-                PathElement element = path[i];
-                if (!carLaneData.TryGetComponent(element.m_Target, out CarLane lane)) continue;
-                if (!curveData.TryGetComponent(element.m_Target, out Curve curve)) continue;
-                float length = curve.m_Length * math.abs(element.m_TargetDelta.y - element.m_TargetDelta.x);
-                float free = length / math.max(1f, lane.m_SpeedLimit);
-                // Same slowdown the pathfinder applies: speed * (1 - FlowOffset / 256).
-                float slowdown = 1f - lane.m_FlowOffset / 256f;
+                if (!ElementSeconds(path[i], ref carLaneData, ref curveData, out float congested, out float free)) continue;
                 freeSeconds += free;
-                seconds += free / math.max(1f / 256f, slowdown);
+                seconds += congested;
             }
+        }
+
+        /// <summary>
+        /// Drive time of one path element: at the speed limit, and with the slowdown the pathfinder applies
+        /// (speed * (1 - FlowOffset / 256)). False for elements that are not car lanes.
+        /// </summary>
+        public static bool ElementSeconds(PathElement element, ref ComponentLookup<CarLane> carLaneData, ref ComponentLookup<Curve> curveData,
+            out float seconds, out float freeSeconds)
+        {
+            seconds = 0f;
+            freeSeconds = 0f;
+            if (!carLaneData.TryGetComponent(element.m_Target, out CarLane lane)) return false;
+            if (!curveData.TryGetComponent(element.m_Target, out Curve curve)) return false;
+            float length = curve.m_Length * math.abs(element.m_TargetDelta.y - element.m_TargetDelta.x);
+            freeSeconds = length / math.max(1f, lane.m_SpeedLimit);
+            float slowdown = 1f - lane.m_FlowOffset / 256f;
+            seconds = freeSeconds / math.max(1f / 256f, slowdown);
+            return true;
         }
     }
 }
