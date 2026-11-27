@@ -57,6 +57,12 @@ whenever a design decision is made or a test changes our understanding, and keep
 - **Cost baseline** (v1.0, 100k city, game speed 4): simulation speed -0.0%, FPS -0.4%, the mod about 1% of one CPU
   core and about 5 MB. Game memory from Unity's `Profiler.GetTotalReservedMemoryLong` (the process API returns 0 in the
   game's runtime). In the 2026-11 tests: Balanced ~5 ms per run (~2% of a core), Eager ~10 ms (~3.4%).
+- **Performance review before 1.1** (2026-11-27). Routing runs for everyone; everything else only with the statistics
+  panel on. Measured: mod 0.8-3.4% of one core, simulation speed within noise of Native (Eager about -2%), bottleneck
+  finder 0.8-2.8 ms per sample (every 1024 frames). Changed: the queue walk remembers each car's head, so a sample walks
+  every queue once (was once per queued car, up to cars x 256 steps in gridlock); the overlay rebuilds its shapes only
+  on a change of view, style or zoom (3%+), or every 0.5 s, not every frame. Watch: the panel's history JSON (up to
+  1,440 game hours, roughly 2 MB) is rebuilt and sent to the UI once per game hour while statistics are on.
 - **Travel mode: count everyone on the move** (2026-11-27). Eager had 30% fewer cars than Native already in the first
   game hour, while people on public transport and shopping trips stayed flat; faster trips explain ~10%, not 30-50%.
   The route planner also picks the travel mode (research.md section 9), so higher car-lane costs make people leave the

@@ -227,6 +227,9 @@ namespace LiveTrafficRouting
         }
 
         private readonly List<Shape> m_Shapes = new List<Shape>();
+        private OverlayView m_BuiltView;
+        private Style m_BuiltStyle;
+        private double m_NextRebuild;
 
         protected override void OnUpdate()
         {
@@ -241,8 +244,17 @@ namespace LiveTrafficRouting
 
             Style st = s_Style;
             float zoom = ZoomFactor(view, st);
-            m_Zoom = zoom;
-            BuildShapes(view, st);
+            // Rebuild the shapes only when something changed (the view, the style, the zoom by 3%+) or every half second
+            // (roads can change while it is shown): building reads many components on the main thread.
+            if (view != m_BuiltView || st != m_BuiltStyle || math.abs(zoom - m_Zoom) > m_Zoom * 0.03f || now >= m_NextRebuild)
+            {
+                m_Zoom = zoom;
+                BuildShapes(view, st);
+                m_BuiltView = view;
+                m_BuiltStyle = st;
+                m_NextRebuild = now + 0.5;
+            }
+            zoom = m_Zoom;
             OverlayRenderSystem.Buffer buffer = m_OverlayRenderSystem.GetBuffer(out JobHandle deps);
             deps.Complete();
             var round = new float2(1f, 1f);

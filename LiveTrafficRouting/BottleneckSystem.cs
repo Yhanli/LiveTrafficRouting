@@ -115,6 +115,12 @@ namespace LiveTrafficRouting
         // [17] origins outside the city, [18] destinations outside the city
         private const int kStatCount = 19;
 
+        private struct HeadLink
+        {
+            public Entity Head;
+            public int Chain;
+        }
+
         private struct HeadInfo
         {
             public Entity Place;
@@ -292,6 +298,9 @@ namespace LiveTrafficRouting
             public NativeList<Entity> m_LinkLanes;
 
             public NativeParallelHashMap<Entity, HeadInfo> m_Heads;
+            // Each car's queue head and distance to it, filled while walking: a later car that reaches a known car stops
+            // there, so a sample walks every queue once (was once per queued car: up to cars x 256 steps in gridlock).
+            public NativeParallelHashMap<Entity, HeadLink> m_HeadOf;
             public NativeParallelHashMap<Entity, PlaceStats> m_Places;
             public NativeParallelHashMap<OdKey, int> m_Od;
             public NativeParallelHashMap<LinkKey, LinkStats> m_Links;
@@ -313,6 +322,7 @@ namespace LiveTrafficRouting
                 BufferAccessor<CarNavigationLane> navs = chunk.GetBufferAccessor(ref m_NavigationLaneType);
                 bool covered = chunk.Has(ref m_PersonalCarType) || chunk.Has(ref m_DeliveryTruckType) || chunk.Has(ref m_TaxiType);
                 bool truckChunk = chunk.Has(ref m_DeliveryTruckType);
+                var walked = new NativeList<Entity>(64, Allocator.Temp);
 
                 for (int i = 0; i < entities.Length; i++)
                 {
@@ -371,8 +381,16 @@ namespace LiveTrafficRouting
                     // Follow the cars ahead to the first one that isn't held up by another stopped or crawling car.
                     Entity head = vehicle;
                     int chain = 0;
+                    walked.Clear();
                     while (chain < kMaxChain)
                     {
+                        if (m_HeadOf.TryGetValue(head, out HeadLink known))
+                        {
+                            chain += known.Chain;
+                            head = known.Head;
+                            break;
+                        }
+                        walked.Add(head);
                         if (!m_BlockerData.TryGetComponent(head, out Blocker b)) break;
                         if (b.m_Type != BlockerType.Continuing || b.m_Blocker == Entity.Null) break;
                         if (!m_MovingData.TryGetComponent(b.m_Blocker, out Moving ahead) || !m_BlockerData.HasComponent(b.m_Blocker)) break;
@@ -388,6 +406,12 @@ namespace LiveTrafficRouting
                         head = b.m_Blocker;
                         chain++;
                     }
+                    // Remember the head for every car passed on the way (its distance = total - its step).
+                    for (int w = 0; w < walked.Length; w++)
+                    {
+                        if (!m_HeadOf.ContainsKey(walked[w])) m_HeadOf[walked[w]] = new HeadLink { Head = head, Chain = math.max(0, chain - w) };
+                    }
+                    chain = math.min(chain, kMaxChain);
                     if (chain >= kMaxChain) m_Stats[4] += 1;
                     m_Stats[2] += chain;
                     m_Stats[3] = math.max(m_Stats[3], chain);
@@ -916,6 +940,7 @@ namespace LiveTrafficRouting
         private EntityQuery m_VehicleQuery;
 
         private NativeParallelHashMap<Entity, HeadInfo> m_Heads;
+        private NativeParallelHashMap<Entity, HeadLink> m_HeadOf;
         private NativeParallelHashMap<Entity, PlaceStats> m_Places;
         private NativeParallelHashMap<OdKey, int> m_Od;
         private NativeParallelHashMap<LinkKey, LinkStats> m_Links;
@@ -963,6 +988,7 @@ namespace LiveTrafficRouting
                 },
             });
             m_Heads = new NativeParallelHashMap<Entity, HeadInfo>(4096, Allocator.Persistent);
+            m_HeadOf = new NativeParallelHashMap<Entity, HeadLink>(16384, Allocator.Persistent);
             m_Places = new NativeParallelHashMap<Entity, PlaceStats>(1024, Allocator.Persistent);
             m_Od = new NativeParallelHashMap<OdKey, int>(4096, Allocator.Persistent);
             m_Links = new NativeParallelHashMap<LinkKey, LinkStats>(512, Allocator.Persistent);
@@ -981,6 +1007,7 @@ namespace LiveTrafficRouting
         {
             m_LastJob.Complete();
             m_Heads.Dispose();
+            m_HeadOf.Dispose();
             m_Places.Dispose();
             m_Od.Dispose();
             m_Links.Dispose();
@@ -1019,6 +1046,7 @@ namespace LiveTrafficRouting
         private void ClearSample()
         {
             m_Heads.Clear();
+            m_HeadOf.Clear();
             m_Places.Clear();
             m_Od.Clear();
             m_Links.Clear();
@@ -1135,6 +1163,7 @@ namespace LiveTrafficRouting
                 m_LinkPoints = m_LinkPoints,
                 m_LinkLanes = m_LinkLanes,
                 m_Heads = m_Heads,
+                m_HeadOf = m_HeadOf,
                 m_Places = m_Places,
                 m_Od = m_Od,
                 m_Links = m_Links,
