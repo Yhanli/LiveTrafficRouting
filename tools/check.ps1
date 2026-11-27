@@ -3,7 +3,7 @@
     Repository checks that run without the game. Run before committing and before publishing.
 .DESCRIPTION
     - PublishConfiguration.xml is valid, has the required fields and an x.y.z ModVersion.
-    - Every listed thumbnail/screenshot exists and is under Paradox Mods' 2.1 MB image limit.
+    - Every listed thumbnail/screenshot exists and is under Paradox Mods' 2.1 MB image limit; at most 10 screenshots.
     - Every option in LiveTrafficSettings.cs has a label and description, and every dropdown value has a text.
     - The mod page and README don't use the trademarked name "Google".
     The mod itself is built with tools\build.ps1 (needs the game's DLLs and the modding toolchain).
@@ -50,6 +50,8 @@ if ($config) {
     } else { Fail 'LiveTrafficRouting/Mod.cs' 'No const string Version found' }
 
     $images = @($p.Thumbnail.Value) + @($p.Screenshot | ForEach-Object { $_.Value }) | Where-Object { $_ }
+    $shots = @($p.Screenshot | ForEach-Object { $_.Value } | Where-Object { $_ })
+    if ($shots.Count -gt 10) { Fail $configRel "$($shots.Count) screenshots: Paradox Mods accepts at most 10" }
     foreach ($image in $images) {
         $file = Join-Path $projectDir $image
         if (-not (Test-Path $file)) { Fail $configRel "Image not found: $image"; continue }
