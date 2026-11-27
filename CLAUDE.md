@@ -123,6 +123,10 @@ same turn, briefly.
 - Publishing: only when the user asks; it uploads under their Paradox account. `tools\publish.ps1` runs the checks,
   refuses uncommitted work or an existing vX.Y.Z tag, uses PublishNewMod while ModId is empty (then put the new id in
   PublishConfiguration.xml) and PublishNewVersion afterwards, and tags the commit. AccessLevel is Public (released).
+  The publisher signs in **through Steam** (the Paradox account linked to this PC's Steam account, `.pdxsdk/<steam id>`),
+  not the game's sign-in; Paradox refuses an account whose email is not verified (fix it in the Paradox account
+  settings). Paradox Mods accepts **at most 10 screenshots** (`check.ps1` checks). After a successful upload the mod
+  shows "pending publication" for a few minutes. The script pushes the tag; the user pushes `main`.
 - Images: `tools\make-thumbnail.ps1` and `tools\make-explainers.ps1` (run with `powershell.exe -STA`), and
   `tools\convert-screenshots.ps1` for in-game screenshots (to JPG).
 
