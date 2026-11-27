@@ -18,16 +18,13 @@ In the base game, drivers only learn very slowly (over game days) which roads ar
 - New in 1.1: **Temporary roadworks** (in the statistics panel): close a road for traffic, or ask drivers to avoid or prefer it, to test your network without deleting anything. These marks are temporary: they are not saved and are cleared when you load a save.
 - New in 1.1: a **bottleneck finder** (statistics panel, Causes tab): where each queue actually starts and why (traffic lights, turning across oncoming traffic, give way, lanes merging, people crossing, buses or service vehicles stopping in the lane, and more), shown on the map with the lanes and turns of the junction, where the stuck drivers come from and go to, and what you can do about it: lane and turn advice, and new roads or missing turns that would let the drivers skip the queue. It ranks problems over the last 24 game hours and tells you when a fix worked.
 
-**Tested results (one 100k city, Balanced vs the mod off, same save, same game hours; your city will differ with its road network)**
-- About 28% fewer vehicles waiting in queues
-- About 87% fewer jam warnings on the map
-- Real driving speed up about 3%
-- Only slightly more traffic on local streets (about 10%)
-- No measurable slowdown at the fastest game speed: the mod itself uses about 1% of one CPU core and about 5 MB of memory (tested in a 100k city)
+**Tested results (version 1.1, one city, the same save and the same 49 game hours, compared with the mod off; your city will differ with its road network)**
+- Balanced: about 64% fewer jam warnings, 18% fewer vehicles waiting in queues, real driving speed up about 8%, and 16% fewer cars that the game removes because they are stuck.
+- Eager: about 81% fewer jam warnings, 31% fewer vehicles in queues, speed up about 13%, half as many stuck cars removed.
+- Part of this comes from people driving less: when car routes look slow, the game's route planner also lets people walk or take the bus instead. With Balanced about 20% fewer people were in cars at any moment, with Eager about 55% fewer; people on public transport stayed about the same. The statistics panel shows this (car share of travellers, people walking).
+- No measurable slowdown: simulation speed stayed within the normal variation (Eager about 2% lower). The mod itself uses about 2% (Balanced) to 3% (Eager) of one CPU core.
 
-Eager pushes harder (queues down about 38%) but sends noticeably more traffic through neighbourhoods. Relaxed is a light touch.
-
-These results were measured with version 1.0. The 1.1 additions start from first estimates and are still being tested; the presets may change with the results.
+Balanced is the recommended setting. Eager pushes hardest. Relaxed is a light touch. These runs were made before "Keep through traffic out of neighbourhoods" recognised local streets correctly, so that setting's effect is not in these numbers yet.
 
 **For traffic geeks (optional, off by default)**
 Turn on **Statistics panel** in the options to get a traffic icon in the game with a Live Traffic panel: how traffic is doing right now, the busiest streets and junctions (click one to jump there), charts per hour of the day, why the cars in queues are on the road, the mod's cost, and side-by-side comparisons between the mod off and different settings, with a check of whether a difference is real or just the simulation's randomness. Every game hour is saved to ModsData/LiveTrafficRouting/captures.csv for your own spreadsheets. You choose how long statistics are kept (1 game month to unlimited), and while recording, milestone popups don't pause your test. With the panel off, nothing is recorded.
@@ -46,6 +43,8 @@ Especially from big cities (250k+) and players using other traffic mods. Please 
 	<!--Screenshots, shown in this order. Paradox Mods rejects images over 2.1 MB: keep them as JPG.-->
 	<Screenshot Value="Properties/Screenshots/0a-before-after.png" />
 	<Screenshot Value="Properties/Screenshots/0b-how-it-works.png" />
+	<Screenshot Value="Properties/Screenshots/9-causes-junction.jpg" />
+	<Screenshot Value="Properties/Screenshots/10-causes-map.jpg" />
 	<Screenshot Value="Properties/Screenshots/1-interchange.jpg" />
 	<Screenshot Value="Properties/Screenshots/2-hotspots-native-vs-live.jpg" />
 	<Screenshot Value="Properties/Screenshots/3-jam-warnings-by-hour.jpg" />

@@ -20,6 +20,11 @@ same turn, briefly.
   (badges, colours), not buried in text. Details in the `panel-and-overlay-ui` skill.
 - **Don't flood the player:** thresholds, rankings over time, and suggestions tied to a real problem (they go away
   when it's fixed). Show when a fix worked.
+- **A release ships with current evidence:** before publishing, update the mod page's screenshots (pick from the
+  user's in-game shots, full size in `%USERPROFILE%\OneDrive\Pictures\Screenshots 1`; only ones whose panel text is
+  still correct, crop away outdated parts; JPG under 2.1 MB via a PresentationCore script like
+  `tools\convert-screenshots.ps1`) and its "Tested results" from the latest A/B runs (paired game hours from
+  `captures.csv`), stating caveats honestly. Don't publish with the previous version's numbers or pictures.
 - **Record decisions** in `docs/decisions.md` (by topic, with date or version) and game facts in `docs/research.md`.
 - **Versions:** everything after 1.0.0 is 1.1.0 until it is published, on branch `release/1.1.0`. Commit only when
   asked; never push (the user pushes from their own terminal); publish only when asked.
