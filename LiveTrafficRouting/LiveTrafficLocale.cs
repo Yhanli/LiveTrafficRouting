@@ -31,12 +31,16 @@ namespace LiveTrafficRouting
                     "Relaxed: a light touch. Drivers avoid the worst jams and stay on main roads; about 1 in 3 re-routes mid-trip. Fewer jam warnings, little else changes.\n" +
                     "Balanced: recommended. Drivers react quickly to jams and 3 in 4 re-route mid-trip. In testing: about a quarter fewer vehicles waiting in queues, far fewer jam warnings, and only slightly more traffic on local streets.\n" +
                     "Eager: the strongest. A jammed road is treated almost like a closed one and every driver re-routes. Queues drop the most, but noticeably more traffic cuts through neighbourhoods.\n" +
-                    "Custom: your own mix. Picking a preset fills in the sliders below; changing any slider switches to Custom." },
+                    "Custom: your own mix. Picking a preset fills in the sliders below; changing any slider switches to Custom.\n" +
+                    "Auto: tunes itself to your city. It starts from Balanced and keeps testing small changes (jam penalty, spreading, neighbourhoods) one game hour at a time, " +
+                    "keeping a change only when it clearly cuts queues without sending more traffic through local streets. It needs a couple of game days per step. " +
+                    "The sliders are not used while on Auto. What it learned is kept per city in ModsData/LiveTrafficRouting/auto-tuning.txt (not in the save)." },
                 { s.GetEnumValueLocaleID(TrafficAwareness.Off), "Off (game default)" },
                 { s.GetEnumValueLocaleID(TrafficAwareness.Relaxed), "Relaxed" },
                 { s.GetEnumValueLocaleID(TrafficAwareness.Balanced), "Balanced (recommended)" },
                 { s.GetEnumValueLocaleID(TrafficAwareness.Eager), "Eager" },
                 { s.GetEnumValueLocaleID(TrafficAwareness.Custom), "Custom" },
+                { s.GetEnumValueLocaleID(TrafficAwareness.Auto), "Auto (tunes itself to your city)" },
 
                 { s.GetOptionLabelLocaleID(nameof(LiveTrafficSettings.LiveTrust)), "Right now vs usual traffic" },
                 { s.GetOptionDescLocaleID(nameof(LiveTrafficSettings.LiveTrust)),
@@ -60,10 +64,25 @@ namespace LiveTrafficRouting
                     "At 10, drivers accept a detour up to 10 times as long as the jammed stretch. " +
                     "Lower keeps traffic on main roads even when they are busy; higher lets drivers detour further. Above about 50 a jammed road is treated almost as closed." },
 
+                { s.GetOptionLabelLocaleID(nameof(LiveTrafficSettings.Spread)), "Spread drivers over detours" },
+                { s.GetOptionDescLocaleID(nameof(LiveTrafficSettings.Spread)),
+                    "Drivers also look at where everyone else is about to drive, not only at where traffic is slow right now. " +
+                    "A road that many drivers are heading for looks busier before it jams, so the next drivers pick another way, " +
+                    "and traffic spreads over several detours instead of all piling onto the same one. " +
+                    "0% turns this off. Higher spreads traffic more, but may also send more of it along smaller roads." },
+
+                { s.GetOptionLabelLocaleID(nameof(LiveTrafficSettings.Neighbourhoods)), "Keep through traffic out of neighbourhoods" },
+                { s.GetOptionDescLocaleID(nameof(LiveTrafficSettings.Neighbourhoods)),
+                    "Local streets (50 km/h or less) that get much more traffic than they usually do look slower to drivers passing through, " +
+                    "so they stay on main roads. People who live or work there still use them. " +
+                    "It learns what is usual for each street while you play (it starts over after loading a save). 0% turns this off." },
+
                 { s.GetOptionLabelLocaleID(nameof(LiveTrafficSettings.RerouteShare)), "Drivers who re-route while driving" },
                 { s.GetOptionDescLocaleID(nameof(LiveTrafficSettings.RerouteShare)),
                     "The share of drivers with live navigation (cars, delivery trucks and taxis, including traffic passing through the city). " +
-                    "They can switch to a faster way mid-trip when the road ahead jams up. Buses and other public transport always keep to their line. " +
+                    "They can switch to a faster way mid-trip when the road ahead jams up, at the next junction where there is a choice. " +
+                    "Ambulances, fire engines and police cars on an emergency run always do, whatever this is set to. " +
+                    "Buses and other public transport always keep to their line. " +
                     "The others keep the route they picked when they set off. 0% turns mid-trip re-routing off. " +
                     "Higher values spread traffic better but make the game calculate more routes." },
 
@@ -105,7 +124,8 @@ namespace LiveTrafficRouting
 
                 { s.GetOptionLabelLocaleID(nameof(LiveTrafficSettings.LogStatistics)), "Write traffic report to log" },
                 { s.GetOptionDescLocaleID(nameof(LiveTrafficSettings.LogStatistics)),
-                    "Every game hour, also write the statistics (needs the statistics panel on) to Logs/LiveTrafficRouting.log. " +
+                    "Write extra detail to Logs/LiveTrafficRouting.log for testing and bug reports: every game hour the statistics " +
+                    "(needs the statistics panel on), the busiest planned streets, forecast counts and Auto tuning steps. " +
                     "Only needed when reporting a problem." },
 
                 { s.GetOptionLabelLocaleID(nameof(LiveTrafficSettings.ResetSettings)), "Reset settings" },

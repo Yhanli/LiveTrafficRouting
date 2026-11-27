@@ -39,6 +39,42 @@ namespace LiveTrafficRouting
 
         public float PlannerSpeedPct;      // what the route planner "sees" (with penalties); Live only
         public float PlannerJammedPct;
+        public float PlannerForecastPct;   // lane updates where the forecast set the cost (v1.1)
+        public float PlannerLocalPct;      // lane updates with the neighbourhood penalty (v1.1)
+        public float ForecastMaxVc;        // highest planned demand / capacity of a lane
+        public float ForecastVehicles;     // vehicles in the last complete forecast count
+
+        public int RerouteEmergency;       // re-routes by ambulances, fire engines and police cars (v1.1)
+        public int RerouteDeferred;        // re-routes that waited for a junction with a choice (v1.1)
+        // v1.1: road vehicles the game removed this hour: stuck (gridlock breaker), route failed, trip done.
+        // Re-routes whose new path failed, and re-routed cars removed before the new path came back. -1 = not measured.
+        public int DespawnStuck = -1;
+        public int DespawnFailed = -1;
+        public int RemovedDone = -1;
+        public int RerouteFailed = -1;
+        public int RerouteGone = -1;
+        // v1.1: re-routes triggered by a standing jam (rule b), how many were evaluated and found faster; re-routes
+        // skipped because the car was in a junction or first in line. -1 = not measured.
+        public int RerouteJam = -1;
+        public int RerouteJamEvaluated = -1;
+        public int RerouteJamBetter = -1;
+        public int RerouteAtJunction = -1;
+        public float RerouteBudget;        // average re-routes allowed per run (follows how busy the pathfinder is)
+
+        // Travel mode (v1.1): people riding in cars and taxis vs in public transport, averaged over the samples.
+        public float CarPassengers;
+        public float TransitPassengers;
+        public float TransitSharePct;
+        // Travel mode (v1.1): people cycling, walking, waiting for public transport or a taxi, and waiting for the game to
+        // find them a route; -1 = recorded before these were measured. CarSharePct = car and taxi riders out of everyone
+        // on the move (car, public transport, bicycle, walking).
+        public float BikeRiders = -1;
+        public float Walking = -1;
+        public float WaitingTransit = -1;
+        public float WaitingRoute = -1;
+        public float CarSharePct = -1;
+
+        public string AutoSetup = "";      // Auto preset: this hour's values (empty for other presets)
 
         public float ModMs;                // our own jobs, one timed run (flow + re-route)
 
@@ -104,6 +140,31 @@ namespace LiveTrafficRouting
             new Column("reroute_held_back", c => c.RerouteHeldBack.ToString(Inv), (c, v) => c.RerouteHeldBack = I(v)),
             new Column("planner_speed_pct", c => F(c.PlannerSpeedPct), (c, v) => c.PlannerSpeedPct = P(v)),
             new Column("planner_jammed_pct", c => F(c.PlannerJammedPct), (c, v) => c.PlannerJammedPct = P(v)),
+            new Column("planner_forecast_pct", c => F(c.PlannerForecastPct), (c, v) => c.PlannerForecastPct = P(v)),
+            new Column("planner_local_pct", c => F(c.PlannerLocalPct), (c, v) => c.PlannerLocalPct = P(v)),
+            new Column("forecast_max_vc", c => F(c.ForecastMaxVc), (c, v) => c.ForecastMaxVc = P(v)),
+            new Column("forecast_vehicles", c => F(c.ForecastVehicles), (c, v) => c.ForecastVehicles = P(v)),
+            new Column("reroute_emergency", c => c.RerouteEmergency.ToString(Inv), (c, v) => c.RerouteEmergency = I(v)),
+            new Column("reroute_deferred", c => c.RerouteDeferred.ToString(Inv), (c, v) => c.RerouteDeferred = I(v)),
+            new Column("despawn_stuck", c => c.DespawnStuck.ToString(Inv), (c, v) => c.DespawnStuck = IOrMissing(v)),
+            new Column("despawn_failed", c => c.DespawnFailed.ToString(Inv), (c, v) => c.DespawnFailed = IOrMissing(v)),
+            new Column("removed_done", c => c.RemovedDone.ToString(Inv), (c, v) => c.RemovedDone = IOrMissing(v)),
+            new Column("reroute_failed", c => c.RerouteFailed.ToString(Inv), (c, v) => c.RerouteFailed = IOrMissing(v)),
+            new Column("reroute_gone", c => c.RerouteGone.ToString(Inv), (c, v) => c.RerouteGone = IOrMissing(v)),
+            new Column("reroute_jam", c => c.RerouteJam.ToString(Inv), (c, v) => c.RerouteJam = IOrMissing(v)),
+            new Column("reroute_jam_evaluated", c => c.RerouteJamEvaluated.ToString(Inv), (c, v) => c.RerouteJamEvaluated = IOrMissing(v)),
+            new Column("reroute_jam_better", c => c.RerouteJamBetter.ToString(Inv), (c, v) => c.RerouteJamBetter = IOrMissing(v)),
+            new Column("reroute_at_junction", c => c.RerouteAtJunction.ToString(Inv), (c, v) => c.RerouteAtJunction = IOrMissing(v)),
+            new Column("reroute_budget", c => F(c.RerouteBudget), (c, v) => c.RerouteBudget = P(v)),
+            new Column("car_passengers", c => F(c.CarPassengers), (c, v) => c.CarPassengers = P(v)),
+            new Column("transit_passengers", c => F(c.TransitPassengers), (c, v) => c.TransitPassengers = P(v)),
+            new Column("transit_share_pct", c => F(c.TransitSharePct), (c, v) => c.TransitSharePct = P(v)),
+            new Column("bike_riders", c => F(c.BikeRiders), (c, v) => c.BikeRiders = FOrMissing(v)),
+            new Column("walking", c => F(c.Walking), (c, v) => c.Walking = FOrMissing(v)),
+            new Column("waiting_transit", c => F(c.WaitingTransit), (c, v) => c.WaitingTransit = FOrMissing(v)),
+            new Column("waiting_route", c => F(c.WaitingRoute), (c, v) => c.WaitingRoute = FOrMissing(v)),
+            new Column("car_share_pct", c => F(c.CarSharePct), (c, v) => c.CarSharePct = FOrMissing(v)),
+            new Column("auto_setup", c => c.AutoSetup, (c, v) => c.AutoSetup = v),
             new Column("mod_ms", c => F(c.ModMs), (c, v) => c.ModMs = P(v)),
             new Column("car_commute_pct", c => F(c.CarCommutePct), (c, v) => c.CarCommutePct = P(v)),
             new Column("car_home_pct", c => F(c.CarHomePct), (c, v) => c.CarHomePct = P(v)),
@@ -174,6 +235,22 @@ namespace LiveTrafficRouting
             Num(sb, "rrBetter", RerouteBetter); Num(sb, "rrNoBetter", RerouteNoBetter); Num(sb, "rrSaved", RerouteSavedPct);
             Num(sb, "rrHeld", RerouteHeldBack); Num(sb, "planSpeed", PlannerSpeedPct); Num(sb, "planJammed", PlannerJammedPct);
             Num(sb, "ms", ModMs);
+            // v1.1: -1 marks hours recorded before these were measured.
+            bool v11 = ForecastVehicles > 0 || RerouteBudget > 0 || CarPassengers + TransitPassengers > 0;
+            Num(sb, "planFc", v11 ? PlannerForecastPct : -1); Num(sb, "planLocal", v11 ? PlannerLocalPct : -1);
+            Num(sb, "fcMaxVc", v11 ? ForecastMaxVc : -1); Num(sb, "fcVeh", v11 ? ForecastVehicles : -1);
+            Num(sb, "rrEmerg", v11 ? RerouteEmergency : -1); Num(sb, "rrDefer", v11 ? RerouteDeferred : -1);
+            Num(sb, "rrBudget", v11 ? RerouteBudget : -1);
+            bool pax = CarPassengers + TransitPassengers > 0;
+            Num(sb, "carPax", pax ? CarPassengers : -1); Num(sb, "transitPax", pax ? TransitPassengers : -1);
+            Num(sb, "transit", pax ? TransitSharePct : -1);
+            Num(sb, "bikePax", BikeRiders); Num(sb, "walking", Walking); Num(sb, "waitTransit", WaitingTransit);
+            Num(sb, "waitRoute", WaitingRoute); Num(sb, "carShare", CarSharePct);
+            Str(sb, "auto", AutoSetup);
+            Num(sb, "dsStuck", DespawnStuck); Num(sb, "dsFailed", DespawnFailed); Num(sb, "rmDone", RemovedDone);
+            Num(sb, "rrFailed", RerouteFailed); Num(sb, "rrGone", RerouteGone);
+            Num(sb, "rrJam", RerouteJam); Num(sb, "rrJamEval", RerouteJamEvaluated); Num(sb, "rrJamBetter", RerouteJamBetter);
+            Num(sb, "rrAtJunction", RerouteAtJunction);
             // Destinations: -1 marks hours recorded before these were measured.
             bool d = ShopTrips + LeisureTrips + CarCommutePct + CarHomePct + CarShopPct + CarLeisurePct + CarOtherPct > 0;
             Num(sb, "cCom", d ? CarCommutePct : -1); Num(sb, "cHome", d ? CarHomePct : -1); Num(sb, "cShop", d ? CarShopPct : -1);
@@ -205,9 +282,34 @@ namespace LiveTrafficRouting
                 sb.Append(string.Format(Inv, "Re-routes {0} ({1} cars, {2} trucks, {3} taxis, {4} held back): {5} faster (avg {6:0}% saved), {7} no better. ",
                     Reroutes, RerouteCars, RerouteTrucks, RerouteTaxis, RerouteHeldBack, RerouteBetter, RerouteSavedPct, RerouteNoBetter));
                 sb.Append(string.Format(Inv, "Planner view: {0:0}% speed, {1:0.0}% jammed. ", PlannerSpeedPct, PlannerJammedPct));
+                sb.Append(string.Format(Inv, "Forecast: {0:0} vehicles counted, {1:0.0}% of lane updates priced by forecast, {2:0.0}% with neighbourhood penalty, max demand/capacity {3:0.00}. ",
+                    ForecastVehicles, PlannerForecastPct, PlannerLocalPct, ForecastMaxVc));
+                sb.Append(string.Format(Inv, "Emergency re-routes {0}, {1} waited for a junction, budget {2:0} per run. ", RerouteEmergency, RerouteDeferred, RerouteBudget));
+                if (!string.IsNullOrEmpty(AutoSetup)) sb.Append("Auto: ").Append(AutoSetup).Append(". ");
+            }
+            if (DespawnStuck >= 0)
+            {
+                sb.Append(string.Format(Inv, "Vehicles removed by the game: {0} stuck (gridlock), {1} route failed, {2} trip done. ",
+                    DespawnStuck, DespawnFailed, RemovedDone));
+            }
+            if (Mode == "Live" && RerouteFailed >= 0)
+            {
+                sb.Append(string.Format(Inv, "Re-routes with a failed new path {0}, re-routed cars removed before the new path {1}. ", RerouteFailed, RerouteGone));
+                int otherEval = RerouteBetter + RerouteNoBetter - RerouteJamEvaluated;
+                int otherBetter = RerouteBetter - RerouteJamBetter;
+                sb.Append(string.Format(Inv, "By rule: route got worse {0} ({1:0}% faster), standing jam {2} ({3:0}% faster); skipped in or at a junction {4}. ",
+                    Reroutes - RerouteJam, otherEval > 0 ? 100.0 * otherBetter / otherEval : 0, RerouteJam,
+                    RerouteJamEvaluated > 0 ? 100.0 * RerouteJamBetter / RerouteJamEvaluated : 0, RerouteAtJunction));
             }
             sb.Append(string.Format(Inv, "Queued cars by trip: {0:0}% commute, {1:0}% home, {2:0}% shopping, {3:0}% leisure, {4:0}% other. ",
                 QueuedCommutePct, QueuedHomePct, QueuedShopPct, QueuedLeisurePct, QueuedOtherPct));
+            sb.Append(string.Format(Inv, "Travel: {0:0} people in cars and taxis, {1:0} in public transport ({2:0.0}% public transport). ",
+                CarPassengers, TransitPassengers, TransitSharePct));
+            if (Walking >= 0)
+            {
+                sb.Append(string.Format(Inv, "Also {0:0} cycling, {1:0} walking, {2:0} waiting for public transport or a taxi, {3:0} waiting for a route; cars carry {4:0.0}% of everyone on the move. ",
+                    BikeRiders, Walking, WaitingTransit, WaitingRoute, CarSharePct));
+            }
             sb.Append(string.Format(Inv, "Shopping: {0} trips to {1} places (top 5: {2:0}%), {3:0.0} km from home. Leisure: {4} trips to {5} places (top 5: {6:0}%), {7:0.0} km. ",
                 ShopTrips, ShopPlaces, ShopTop5Pct, ShopKm, LeisureTrips, LeisurePlaces, LeisureTop5Pct, LeisureKm));
             sb.Append(ModMs >= 0 ? string.Format(Inv, "Mod cost {0:0.00} ms per run. ", ModMs) : "Mod cost not measured. ");
@@ -219,6 +321,8 @@ namespace LiveTrafficRouting
         private static string F(float v) => v.ToString("0.###", Inv);
         private static float P(string s) => float.TryParse(s, NumberStyles.Float, Inv, out float v) ? v : 0f;
         private static int I(string s) => int.TryParse(s, NumberStyles.Integer, Inv, out int v) ? v : 0;
+        private static float FOrMissing(string s) => float.TryParse(s, NumberStyles.Float, Inv, out float v) ? v : -1f;
+        private static int IOrMissing(string s) => int.TryParse(s, NumberStyles.Integer, Inv, out int v) ? v : -1;
 
         private static string Escape(string s)
         {
@@ -279,13 +383,18 @@ namespace LiveTrafficRouting
         public string Kind = "";       // "street" or "junction"
         public float Queued;           // average vehicles waiting in a queue there
         public float Jams;             // average jam warnings there
+        // Where the queue was (average position of its cars, game x/z in metres): finds the right street again when
+        // several streets share a name, and across sessions (entity ids change on load). v1.1; older rows have none.
+        public bool HasPos;
+        public float X, Z;
 
-        internal const string Header = "run_id,city,game_time,place,kind,queued,jams";
+        internal const string Header = "run_id,city,game_time,place,kind,queued,jams,x,z";
 
         internal string ToCsv() => string.Join(",", new[]
         {
             Esc(RunId), Esc(City), Esc(GameTime), Esc(Place), Kind,
             Queued.ToString("0.###", CultureInfo.InvariantCulture), Jams.ToString("0.###", CultureInfo.InvariantCulture),
+            HasPos ? X.ToString("0.#", CultureInfo.InvariantCulture) : "", HasPos ? Z.ToString("0.#", CultureInfo.InvariantCulture) : "",
         });
 
         internal static HotspotRow FromCsv(string line, List<string> header)
@@ -296,6 +405,13 @@ namespace LiveTrafficRouting
             float.TryParse(Get("queued"), NumberStyles.Float, CultureInfo.InvariantCulture, out float q);
             float.TryParse(Get("jams"), NumberStyles.Float, CultureInfo.InvariantCulture, out float j);
             var r = new HotspotRow { RunId = Get("run_id"), City = Get("city"), GameTime = Get("game_time"), Place = TrafficReportSystem.CleanName(Get("place")), Kind = Get("kind"), Queued = q, Jams = j };
+            if (float.TryParse(Get("x"), NumberStyles.Float, CultureInfo.InvariantCulture, out float x) &&
+                float.TryParse(Get("z"), NumberStyles.Float, CultureInfo.InvariantCulture, out float z))
+            {
+                r.HasPos = true;
+                r.X = x;
+                r.Z = z;
+            }
             return string.IsNullOrEmpty(r.Place) ? null : r;
         }
 
@@ -323,6 +439,8 @@ namespace LiveTrafficRouting
         public float OtherProgressKmh;
         public float NavSharePct;
         public float ModMs = -1;
+        public string News = "";        // traffic news: a new jam and where drivers are heading instead
+        public string Auto = "";        // Auto preset status line
 
         internal string ToJson()
         {
@@ -333,6 +451,7 @@ namespace LiveTrafficRouting
             TrafficCapture.Num(sb, "queued", QueuedPct); TrafficCapture.Num(sb, "local", LocalStreetPct);
             TrafficCapture.Num(sb, "jams", JamWarnings); TrafficCapture.Num(sb, "navKmh", NavProgressKmh);
             TrafficCapture.Num(sb, "otherKmh", OtherProgressKmh); TrafficCapture.Num(sb, "navShare", NavSharePct);
+            TrafficCapture.Str(sb, "news", News); TrafficCapture.Str(sb, "auto", Auto);
             TrafficCapture.Num(sb, "ms", ModMs, last: true);
             sb.Append('}');
             return sb.ToString();
@@ -479,8 +598,14 @@ namespace LiveTrafficRouting
                     places = new Dictionary<string, float[]>();
                     perRunPlaces[r.RunId] = places;
                 }
-                if (!places.TryGetValue(r.Place, out float[] v)) { v = new float[3]; places[r.Place] = v; }
+                if (!places.TryGetValue(r.Place, out float[] v)) { v = new float[6]; places[r.Place] = v; }
                 v[0] += r.Queued; v[1] += r.Jams; v[2] += 1;
+                // Same-name streets are added up in one row; the position is that of the hour with the biggest
+                // queue, so it points at one real street (an average could land between two of them).
+                if (r.HasPos && r.Queued >= v[5])
+                {
+                    v[3] = r.X; v[4] = r.Z; v[5] = Math.Max(0.01f, r.Queued);
+                }
                 kinds[r.Place] = r.Kind;
             }
             var sb = new StringBuilder("{");
@@ -503,6 +628,11 @@ namespace LiveTrafficRouting
                     TrafficCapture.Str(sb, "k", kinds.TryGetValue(p.Key, out string k) ? k : "");
                     TrafficCapture.Num(sb, "q", p.Value[0] / runHours);
                     TrafficCapture.Num(sb, "j", p.Value[1] / runHours);
+                    if (p.Value[5] > 0)
+                    {
+                        TrafficCapture.Num(sb, "x", Math.Round(p.Value[3], 1));
+                        TrafficCapture.Num(sb, "z", Math.Round(p.Value[4], 1));
+                    }
                     TrafficCapture.Num(sb, "h", p.Value[2], last: true);
                     sb.Append('}');
                 }
@@ -671,6 +801,12 @@ namespace LiveTrafficRouting
                 {
                     HotspotRow r = HotspotRow.FromCsv(lines[i], header);
                     if (r != null) s_Hotspots.Add(r);
+                }
+                if (lines[0].Trim().TrimStart('\uFEFF') != HotspotRow.Header)
+                {
+                    CopyAside(HotspotPath, "hotspots-backup-");
+                    RewriteHotspots();
+                    Logger.Info("Upgraded the hotspots file to the current format.");
                 }
             }
             catch (Exception e)

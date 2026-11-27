@@ -42,6 +42,12 @@ if ($config) {
     if ($forum -and $forum -notmatch '^https://forum\.paradoxplaza\.com/') { Fail $configRel "ForumLink must be a Paradox forum url (or empty), not '$forum'" }
     if ($p.ModVersion.Value -notmatch '^\d+\.\d+\.\d+$') { Fail $configRel "ModVersion '$($p.ModVersion.Value)' must look like 1.2.3" }
     else { Pass "ModVersion $($p.ModVersion.Value)" }
+    # The version written to the log at load (Mod.Version) must match the published one.
+    $modCs = Get-Content (Join-Path $projectDir 'Mod.cs') -Raw -Encoding UTF8
+    if ($modCs -match 'const string Version = "([^"]+)"') {
+        if ($Matches[1] -ne $p.ModVersion.Value) { Fail 'LiveTrafficRouting/Mod.cs' "Version '$($Matches[1])' does not match ModVersion '$($p.ModVersion.Value)'" }
+        else { Pass "Mod.cs Version matches" }
+    } else { Fail 'LiveTrafficRouting/Mod.cs' 'No const string Version found' }
 
     $images = @($p.Thumbnail.Value) + @($p.Screenshot | ForEach-Object { $_.Value }) | Where-Object { $_ }
     foreach ($image in $images) {

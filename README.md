@@ -7,7 +7,7 @@ drivers already on the road switch to a faster way when their route jams up.
 The game already makes roads with slow traffic less attractive, but it learns this very slowly (over game days) and
 per time of day, like "typical traffic". This mod adds a live measurement of the last few game minutes and blends it in.
 
-Background and design: [docs/research.md](docs/research.md).
+Background and design: [docs/research.md](docs/research.md) (how the game works, how the mod is built) and [docs/decisions.md](docs/decisions.md) (what we chose and why, test results).
 
 ## Status
 
@@ -17,8 +17,34 @@ Background and design: [docs/research.md](docs/research.md).
   re-plan when the rest of their route looks a set % slower than when they planned it, or when they are heading
   through a standing jam (route ahead slower than free flow by twice that %). Vehicles that find no better route wait
   longer before checking again. Covers cars, delivery trucks
-  (including semi-trailers) and taxis, including through-traffic. Public transport keeps to its line; service vehicles
-  are not covered yet.
+  (including semi-trailers) and taxis, including through-traffic. Public transport keeps to its line.
+- **v1.1 (tested in one test city; the final Native / Balanced / Eager comparison is still to do, see `docs/decisions.md`):**
+  - **Forecast** (`DemandForecastSystem`): counts, per lane, the vehicles that plan to drive it within the next
+    2 minutes of drive time, and prices that planned demand with a capacity curve (BPR). A floor under the speed cost,
+    so roads many drivers are heading for look busier before they jam. Plus small rotating noise on slowed lanes so
+    drivers planning at the same moment don't all pick the same detour.
+  - **Neighbourhoods**: local streets (50 km/h or less) whose planned traffic rises well above their usual level look
+    slower, so through traffic stays on main roads. "Usual" is learned per lane while playing (in memory).
+  - **Re-routing**: a re-route because the way ahead got slower waits for a junction with a choice (3+ roads); the
+    per-update limit follows how busy the route planner is (8-128, was a fixed 64); ambulances, fire engines and
+    police cars on an emergency run always re-route, with their own limit. Other service vehicles are not covered.
+  - **Auto preset** (`AutoTuner`): switchback experiment, one value at a time (jam penalty, spread, neighbourhoods).
+  - **Temporary roadworks** (`RoadMarkSystem`, `RoadMarkToolSystem`): close, avoid or prefer a road from the panel.
+    In memory only, cleared on load, and the UI says so everywhere.
+  - Statistics: how people travel (car share, walking, cycling, public transport, waiting for a route), vehicles the
+    game removes when stuck and where, forecast and re-route details, traffic news, Copy summary.
+  - **Bottleneck finder** (`BottleneckSystem`, `LaneDiagnosis`, statistics panel only, changes no routing). Follows each queued car's chain of stopped cars (`Blocker`) to the head of its queue; the head's
+  blocker type and lane give the cause (traffic lights, oncoming traffic, cars crossing their path, give way/stop, busy
+  junction, lanes merge or road narrows, cars merging onto a highway, cars entering, parking, buses or service vehicles
+  stopping in the lane, people crossing at a crosswalk or where there is no crosswalk, slow traffic). Junction advice
+  also covers shared turn lanes, turn lanes that are too short, lanes that merge before or after the junction, queues
+  reaching back into the previous junction and queues of mostly trucks (see `docs/decisions.md`). Per queue head: destinations (district, else the street of the target
+  building), origins (where the trip was first seen), through-traffic share. Detours on queued routes (two points
+  <= 400 m apart that the route takes >= 1 km and 3x to connect) are suggested as possible new links, but only when
+  the long way round passes the head of the driver's own queue (so the new road lets them skip it). Each fix belongs
+  to its bottleneck and is shown in that place's details under "What you can do"; it disappears when the bottleneck
+  is cleared or off the list. Panel tab
+  "Causes"; `bottlenecks.csv` / `links.csv`; details in the log with "Write traffic report to log".
 
 ## Settings (Options > Live Traffic Routing)
 
@@ -31,8 +57,9 @@ Background and design: [docs/research.md](docs/research.md).
 | Balanced (default) | Drivers react quickly; 3 in 4 re-route mid-trip. Tested: queues -28%, speed +3%, jam warnings -87%, local streets +10%. |
 | Eager | Strongest: a jammed road is treated almost as closed, every driver re-routes. Tested: queues -38%, speed +6%, but local streets +33%. |
 | Custom | Your own mix. Chosen automatically when you change a slider. |
+| Auto | Tunes itself to the city: alternates game hours between its current values and one small step, keeps a step only when queues clearly drop without more local-street traffic. Sliders are not used. Learned values per city in `ModsData/LiveTrafficRouting/auto-tuning.txt`. |
 
-The sliders are always visible (greyed out when Off). Picking a preset fills them in with these values; changing any
+The sliders are always visible (greyed out when Off or Auto). Picking a preset fills them in with these values; changing any
 slider switches the dropdown to Custom:
 
 | Slider | Meaning | Relaxed | Balanced | Eager |
@@ -41,6 +68,8 @@ slider switches the dropdown to Custom:
 | How quickly jams are noticed | Higher = notices new and cleared jams sooner, but traffic may swing between roads | 50% | 80% | 100% |
 | Jam penalty strength (25-1000%) | Multiplies the extra time a jam adds (200%: twice as slow looks three times as slow) | 100% | 250% | 1000% |
 | Avoid jams up to (2-100×) | The worst a jammed road can look vs driving it at the limit (the pathfinder's own limit is 256×) | 10× | 50× | 100× |
+| Spread drivers over detours (v1.1) | Forecast strength: roads many drivers are heading for look busier before they jam (0% = off) | 25% | 50% | 50% |
+| Keep through traffic out of neighbourhoods (v1.1) | Local streets with much more planned traffic than usual look slower (0% = off) | 50% | 50% | 75% |
 | Drivers who re-route while driving | Share of drivers with live navigation (0% = no mid-trip re-routing) | 30% | 75% | 100% |
 | Re-route when the way ahead gets slower by | How much worse the rest of the route must get vs when planned | 30% | 15% | 15% |
 
@@ -70,10 +99,14 @@ tagged with its **run**, to
 | Real speed | Average real driving speed of all road vehicles vs the speed limit |
 | Waiting in queues | Vehicles stopped behind another stopped vehicle |
 | Jam warnings | Number of jam warning signs the game shows (average and max per hour) |
-| On local streets | Vehicles on roads with a limit of 50 km/h or less (detour traffic in neighbourhoods) |
+| On local streets | Vehicles on roads with a limit of 50 km/h or less (detour traffic in neighbourhoods). Before 1.1.0 this missed almost all small roads (the game stores speed limits at about twice the shown value), so older runs show about 1% and are not comparable |
 | Traffic flow | The game's own Traffic Flow % (the info view chart) |
 | With navigation vs others | How fast vehicles get closer to their destination, for the drivers with live navigation vs everyone else. Same city, same time, so it is a fair comparison. With the mod off both should be about equal. |
-| Re-routing | Re-routes by cars / trucks / taxis, share that found a faster route, estimated time saved |
+| Re-routing | Re-routes by cars / trucks / taxis / emergency vehicles, share that found a faster route, estimated time saved, re-routes that waited for a junction, the per-update limit |
+| Public transport share (v1.1) | People riding public transport, as a share of everyone riding a car, taxi or public transport at that moment. It also rises when car trips get faster (fewer people in cars at any moment), so it is not coloured good or bad: compare **People on public transport** (v1.1) to see whether people actually switched |
+| Trip speed, Vehicles on roads, People in cars (v1.1) | How fast trips progress toward their destination; vehicles and car passengers (not cyclists) on the road at the same moment. Faster trips mean somewhat fewer vehicles on the road for the same number of trips; a big drop usually means people left the car (see below) |
+| Car share of travellers, People walking, People cycling, Waiting for a route (v1.1) | Everyone on the move: in cars and taxis, on public transport, on bicycles, on foot, and people waiting for the game's route planner. The route planner also picks **how** people travel, so a strong setting can make people walk or take the bus instead of driving: that lowers queues too, but it is not better routing. Watch the car share when comparing settings |
+| Forecast (v1.1) | Vehicles counted, share of lane updates priced by the forecast or the neighbourhood penalty, highest demand/capacity |
 | Route planner view | Speeds with the mod's penalties, as the route planner sees them (Live only) |
 | Mod processing time | The mod's own jobs, one run timed per game hour |
 
@@ -95,6 +128,31 @@ Where to see them:
   - **History**: both runs side by side, **by time of day** or as a **timeline**, for any metric.
   - **Hotspots**: the streets and junctions with the most vehicles waiting in queues (and jam warnings), run A vs
     run B. Recorded per game hour (top 15 places) to `hotspots.csv`.
+  - **Causes** (v1.1): the last game hour's top 5 bottlenecks, i.e. where queues *start*, with the cause, cars queued
+    behind, where those drivers go and come from, through traffic share, and up to 3 possible new links. Click to show
+    it on the map. Recorded to `bottlenecks.csv` and `links.csv`.
+    Clicking a place shows it on the map (`BottleneckOverlaySystem`): red = lanes the queue stands on (wider = more
+    cars), turns the queued cars want through the junction (blue left, white straight, purple right, yellow U-turn,
+    wider = more; dashed grey = allowed but unused), with advice from `LaneDiagnosis` (e.g. "91% turns left but only 1
+    of 3 lanes allow it"). A possible link shows the detour (orange) and the suggested connection (dashed green).
+    Turn throughput (`TurnFlowSystem`): for the junctions on the list, cars per lane per game hour for each movement
+    (distance driven on the junction lanes, from the game's `LaneFlow`, / lane length). When most of a queue waits to
+    turn and turning moves much fewer cars per lane than going straight, the advice says the turn is slow (a second
+    turn lane, a wider turn, or a slip lane). Found in the first test: the Ashbourne queue cleared once both lanes
+    could turn.
+    **Ongoing** view (default): places ranked by stuck cars added up over the last 24 game hours ("in 20 of 24
+    hours"), and fix suggestions only when seen in at least a quarter of those hours (from 4 hours on), so one-hour
+    flashes don't show. Each place says whether it is **getting better** or **getting worse** (last 3 game hours against
+    the 24-hour average), or **cleared** when it had no queue for 3 game hours (a fix that worked shows here at once;
+    cleared places move to the bottom and leave once their old hours are out of the window). "This hour" shows the
+    last hour only. A street queue names the junction it ends at and gets
+    that junction's lane and turn advice. Going to / coming from / streets are clickable (camera moves there, no
+    selection pin) and drawn on the map as dashed arcs (cyan from, pink to).
+    Overlay colours and widths: `ModsData/LiveTrafficRouting/overlay-style.txt`, re-read while the game runs. Each
+    shown overlay is also written to `overlay-preview.json`.
+  - **Despawns** (v1.1, Compare metrics): vehicles the game removed per game hour because they were stuck (vanilla
+    `StuckMovingObjectSystem`: a blocked loop or a 100+ vehicle chain) or their route failed, plus failed re-routes
+    (Re-routing metrics). Counted by `DespawnCounterSystem` in Modification1, with the mod on or off.
   - **Trips** (destinations): why queued cars are on the road (commuting, going home, shopping, leisure, other), and for
     shopping and leisure trips (all travel modes): trips per hour, how many different places are used, % of trips to
     the 5 busiest places, and distance from home. Shows whether live traffic makes people pick other places, and how
@@ -107,7 +165,8 @@ Where to see them:
     fastest). The Now tab shows a one-line summary of the last game hour.
   - **Runs**: all runs with their settings; delete one run, **all Live runs (keeping the Native baseline)**, or
     everything for this city.
-- **Log:** with "Write traffic report to log" on, one line per game hour in `Logs/LiveTrafficRouting.log`.
+- **Log:** with "Write traffic report to log" on, one line per game hour in `Logs/LiveTrafficRouting.log`. The game
+  starts that file afresh each time; the previous session's log is kept as `Logs/LiveTrafficRouting-prev.log`.
 - **CSV:** open `captures.csv` in a spreadsheet and filter the `run_id` or `mode` column.
 
 ### Fair A/B test (recommended)
@@ -125,6 +184,13 @@ Where to see them:
 If a run records the same game hour twice, the latest recording counts.
 
 The mod adds nothing to save files. It can be removed at any time.
+
+### Temporary roadworks (v1.1)
+
+Panel > **Roadworks**: pick **Close road**, **Avoid** or **Prefer** and click roads on the map (click again or
+right-click to remove). Closed roads get the route planner's maximum cost, avoided roads look at least 3 times as slow,
+preferred roads ignore half of their congestion penalty. It is a route cost, not a barrier. **Marks are temporary:**
+they are kept in memory only, cleared when you load a save, and every roadworks text in the panel says so.
 
 ## Feedback and bugs
 

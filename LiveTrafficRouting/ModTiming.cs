@@ -9,20 +9,24 @@ namespace LiveTrafficRouting
     {
         public static bool FlowRequested;
         public static bool RerouteRequested;
+        public static bool ForecastRequested;
         public static bool ReportRequested;
         public static double ReportMs = -1;
         public static double FlowMs = -1;
         public static double RerouteMs = -1;
+        public static double ForecastMs = -1;
 
         public static void RequestAll()
         {
             FlowRequested = true;
             RerouteRequested = true;
+            ForecastRequested = true;
             ReportRequested = true;
             ReportMs = -1;
             // Only count what was measured this hour (a system that is off this hour reports nothing).
             FlowMs = -1;
             RerouteMs = -1;
+            ForecastMs = -1;
         }
     }
 }

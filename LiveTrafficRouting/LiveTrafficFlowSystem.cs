@@ -43,6 +43,21 @@ namespace LiveTrafficRouting
         // window, the live speed is blended towards free flow (no cars = road is free right now).
         private const float kFullConfidenceTraversals = 1f;
 
+        // Forecast: a lane carries about this many vehicles per second at the speed limit (a first guess, tuned in game).
+        internal const float kSaturationFlow = 0.5f;
+        // BPR capacity curve: extra time = alpha * (demand / capacity)^4; alpha at "Spread drivers over detours" 100%.
+        private const float kMaxForecastAlpha = 0.6f;
+        // Local streets: extra time = k * (demand above usual) / capacity; k at "Keep out of neighbourhoods" 100%.
+        private const float kMaxNeighbourhoodK = 4f;
+        // A local street counts as busier than usual above usual * 1.2 + 2 vehicles (ignores noise on quiet streets).
+        private const float kUsualMargin = 1.2f;
+        private const float kUsualSlack = 2f;
+        // The usual demand of a lane follows the forecast slowly: 1/64 per visit, about 6 game hours.
+        private const float kUsualRate = 1f / 64f;
+        // Cost dithering: up to +-10% (at "Spread" 100%) on slowed lanes, changing every rotation.
+        private const float kMaxDither = 0.1f;
+        private const float kDitherAbove = 1.2f;
+
         // Entries not visited for this long belong to deleted lanes.
         private const uint kStaleFrames = 16384;
         private const uint kPruneEveryFrames = 32768;
@@ -53,6 +68,13 @@ namespace LiveTrafficRouting
             public float2 m_PrevNext;
             // Smoothed (duration, distance) per live window.
             public float2 m_Live;
+            public uint m_LastFrame;
+        }
+
+        /// <summary>How many vehicles usually plan to drive a lane (slow average of the forecast).</summary>
+        private struct UsualDemand
+        {
+            public float m_Value;
             public uint m_LastFrame;
         }
 
@@ -124,7 +146,11 @@ namespace LiveTrafficRouting
         [BurstCompile]
         private struct UpdateRoadsJob : IJobChunk
         {
+            [ReadOnly] public EntityTypeHandle m_EntityType;
             [ReadOnly] public BufferTypeHandle<SubLane> m_SubLaneType;
+            [ReadOnly] public NativeParallelHashMap<Entity, float> m_Demand;
+            [ReadOnly] public NativeParallelHashMap<Entity, byte> m_Marks;
+            public NativeParallelHashMap<Entity, UsualDemand> m_Usual;
             [ReadOnly] public ComponentLookup<LaneFlow> m_LaneFlowData;
             [ReadOnly] public ComponentLookup<SecondaryFlow> m_SecondaryFlowData;
             [ReadOnly] public ComponentLookup<MasterLane> m_MasterLaneData;
@@ -133,22 +159,31 @@ namespace LiveTrafficRouting
             public ComponentTypeHandle<Road> m_RoadType;
             public ComponentLookup<CarLane> m_CarLaneData;
             public NativeQueue<FlowActionData> m_FlowActions;
-            // [0] lanes, [1] lanes at half speed or worse, [2] sum of blended speed, [3] lanes with live traffic
+            // [0] lanes, [1] lanes at half speed or worse, [2] sum of blended speed, [3] lanes with live traffic,
+            // [4] lanes priced by the forecast, [5] local streets with the neighbourhood penalty, [6] highest demand/capacity
             public NativeArray<float> m_Stats;
             public float4 m_TimeFactors;
             public float m_LiveWeight;
             public float m_PenaltyStrength;
             public float m_MaxSlowdownFactor;
             public int m_MaxOffset;
+            public float m_ForecastAlpha;
+            public float m_NeighbourhoodK;
+            public float m_Dither;
+            public float m_HorizonCapacity;
+            public uint m_Rotation;
+            public uint m_Frame;
 
             public void Execute(in ArchetypeChunk chunk, int unfilteredChunkIndex, bool useEnabledMask, in v128 chunkEnabledMask)
             {
+                NativeArray<Entity> edges = chunk.GetNativeArray(m_EntityType);
                 NativeArray<Road> roads = chunk.GetNativeArray(ref m_RoadType);
                 BufferAccessor<SubLane> subLaneBuffers = chunk.GetBufferAccessor(ref m_SubLaneType);
 
                 for (int i = 0; i < roads.Length; i++)
                 {
                     Road road = roads[i];
+                    m_Marks.TryGetValue(edges[i], out byte mark);
                     DynamicBuffer<SubLane> subLanes = subLaneBuffers[i];
                     road.m_TrafficFlowDuration0 = default;
                     road.m_TrafficFlowDuration1 = default;
@@ -161,13 +196,16 @@ namespace LiveTrafficRouting
                     float4 masterDuration = default;
                     float4 masterDistance = default;
                     float2 masterLive = default;
+                    // Routes name the master lane; the vehicles then spread over its lanes.
+                    float masterDemand = 0f;
+                    float masterShare = 0f;
 
                     for (int j = 0; j < subLanes.Length; j++)
                     {
                         Entity lane = subLanes[j].m_SubLane;
                         if (masterIndex != -1 && j > master.m_MaxIndex)
                         {
-                            ApplyLane(subLanes[masterIndex].m_SubLane, masterDuration, masterDistance, masterLive, out _);
+                            ApplyLane(subLanes[masterIndex].m_SubLane, masterDuration, masterDistance, masterLive, masterDemand, mark, out _);
                             masterIndex = -1;
                         }
 
@@ -178,7 +216,9 @@ namespace LiveTrafficRouting
                             float4 duration = laneFlow.m_Duration + secondary.m_Duration;
                             float4 distance = laneFlow.m_Distance + secondary.m_Distance;
                             float2 live = m_Live.TryGetValue(lane, out LiveLane state) ? state.m_Live : default;
-                            ApplyLane(lane, duration, distance, live, out bool isRoundabout);
+                            m_Demand.TryGetValue(lane, out float ownDemand);
+                            float demand = ownDemand + (masterIndex != -1 ? masterShare : 0f);
+                            ApplyLane(lane, duration, distance, live, demand, mark, out bool isRoundabout);
 
                             // Info-view data: same weighting as vanilla (lane ends on edges, 1/3 inside roundabouts).
                             float2 weight;
@@ -198,6 +238,7 @@ namespace LiveTrafficRouting
                             masterDuration += duration;
                             masterDistance += distance;
                             masterLive += live;
+                            masterDemand += ownDemand;
                         }
                         else if (m_MasterLaneData.TryGetComponent(lane, out MasterLane masterLane))
                         {
@@ -206,19 +247,21 @@ namespace LiveTrafficRouting
                             masterDuration = default;
                             masterDistance = default;
                             masterLive = default;
+                            m_Demand.TryGetValue(lane, out masterDemand);
+                            masterShare = masterDemand / math.max(1, master.m_MaxIndex - master.m_MinIndex + 1);
                         }
                     }
 
                     if (masterIndex != -1)
                     {
-                        ApplyLane(subLanes[masterIndex].m_SubLane, masterDuration, masterDistance, masterLive, out _);
+                        ApplyLane(subLanes[masterIndex].m_SubLane, masterDuration, masterDistance, masterLive, masterDemand, mark, out _);
                     }
 
                     roads[i] = road;
                 }
             }
 
-            private void ApplyLane(Entity lane, float4 duration, float4 distance, float2 live, out bool isRoundabout)
+            private void ApplyLane(Entity lane, float4 duration, float4 distance, float2 live, float demand, byte mark, out bool isRoundabout)
             {
                 isRoundabout = false;
                 if (!m_CarLaneData.TryGetComponent(lane, out CarLane carLane))
@@ -227,11 +270,10 @@ namespace LiveTrafficRouting
                 }
                 isRoundabout = (carLane.m_Flags & (CarLaneFlags.Approach | CarLaneFlags.Roundabout)) == CarLaneFlags.Roundabout;
 
-                // Typical traffic for this time of day (actual speed / speed limit), as vanilla.
+                // 1. Speed: typical traffic for this time of day (actual speed / speed limit, as vanilla), blended with
+                // live traffic over the last few game minutes. With little or no live traffic, assume free flow.
                 float4 typical = math.select(1f, math.saturate(distance / duration), duration > 0f);
                 float typicalSpeed = math.dot(typical, m_TimeFactors);
-
-                // Live traffic over the last few game minutes. With little or no traffic, assume free flow.
                 float confidence = math.saturate(live.x / kFullConfidenceTraversals);
                 float measured = math.select(1f, math.saturate(live.y / live.x), live.x > 1e-4f);
                 float liveSpeed = math.lerp(1f, measured, confidence);
@@ -243,9 +285,55 @@ namespace LiveTrafficRouting
                 float liveTime = 1f / math.max(liveSpeed, minSpeed);
                 float timeFactor = math.lerp(typicalTime, liveTime, m_LiveWeight);
                 timeFactor = 1f + (timeFactor - 1f) * m_PenaltyStrength;
+
+                // 2. Forecast: vehicles planning to drive this lane soon, on a capacity curve. A floor under the speed
+                // cost, not on top of it: once the lane really jams, the speed signal already shows it.
+                float vc = demand / m_HorizonCapacity;
+                if (m_ForecastAlpha > 0f)
+                {
+                    float vc2 = vc * vc;
+                    float forecastFactor = 1f + m_ForecastAlpha * vc2 * vc2;
+                    m_Stats[4] += math.select(0f, 1f, forecastFactor > timeFactor && forecastFactor > 1.05f);
+                    timeFactor = math.max(timeFactor, forecastFactor);
+                }
+                m_Stats[6] = math.max(m_Stats[6], vc);
+
+                // 3. Local streets: much more planned traffic than usual is through traffic cutting through.
+                bool local = carLane.m_SpeedLimit <= TrafficReportSystem.kLocalStreetLimit && (carLane.m_Flags & CarLaneFlags.Highway) == 0;
+                if (m_NeighbourhoodK > 0f && local)
+                {
+                    UsualDemand usual;
+                    if (!m_Usual.TryGetValue(lane, out usual)) usual.m_Value = demand;
+                    usual.m_Value = math.lerp(usual.m_Value, demand, kUsualRate);
+                    usual.m_LastFrame = m_Frame;
+                    m_Usual[lane] = usual;
+                    float excess = math.max(0f, demand - usual.m_Value * kUsualMargin - kUsualSlack);
+                    if (excess > 0f)
+                    {
+                        timeFactor *= 1f + m_NeighbourhoodK * excess / m_HorizonCapacity;
+                        m_Stats[5] += 1f;
+                    }
+                }
+
+                // 4. The player's temporary road marks (roadworks tool).
+                bool closed = mark == RoadMarkSystem.kClosed;
+                if (mark == RoadMarkSystem.kAvoid) timeFactor = math.max(timeFactor, RoadMarkSystem.kAvoidFactor);
+                else if (mark == RoadMarkSystem.kPrefer) timeFactor = 1f + (timeFactor - 1f) * RoadMarkSystem.kPreferKeep;
+
+                // 5. Dithering: slowed lanes look a little faster or slower each rotation, so route requests made close
+                // together don't all pick the very same detour.
+                if (m_Dither > 0f && timeFactor > kDitherAbove)
+                {
+                    float u = (math.hash(new uint2((uint)lane.Index, m_Rotation)) & 0xFFFFu) / 65535f;
+                    timeFactor *= 1f + (u * 2f - 1f) * m_Dither;
+                }
+
                 timeFactor = math.clamp(timeFactor, 1f, m_MaxSlowdownFactor);
                 float speed = 1f / timeFactor;
-                byte offset = (byte)math.clamp(256 - (int)math.round(speed * 256f), 0, m_MaxOffset);
+                // A closed road gets the pathfinder's maximum, past the "Avoid jams up to" limit.
+                byte offset = closed
+                    ? (byte)255
+                    : (byte)math.clamp(256 - (int)math.round(speed * 256f), 0, m_MaxOffset);
 
                 m_Stats[0] += 1f;
                 m_Stats[1] += math.select(0f, 1f, speed <= 0.5f);
@@ -265,6 +353,7 @@ namespace LiveTrafficRouting
         private struct PruneJob : IJob
         {
             public NativeParallelHashMap<Entity, LiveLane> m_Live;
+            public NativeParallelHashMap<Entity, UsualDemand> m_Usual;
             public uint m_Frame;
 
             public void Execute()
@@ -278,6 +367,15 @@ namespace LiveTrafficRouting
                     }
                 }
                 keys.Dispose();
+                keys = m_Usual.GetKeyArray(Allocator.Temp);
+                for (int i = 0; i < keys.Length; i++)
+                {
+                    if (m_Frame - m_Usual[keys[i]].m_LastFrame > kStaleFrames)
+                    {
+                        m_Usual.Remove(keys[i]);
+                    }
+                }
+                keys.Dispose();
             }
         }
 
@@ -285,6 +383,8 @@ namespace LiveTrafficRouting
         private TimeSystem m_TimeSystem;
         private PathfindQueueSystem m_PathfindQueueSystem;
         private TrafficFlowSystem m_VanillaSystem;
+        private DemandForecastSystem m_ForecastSystem;
+        private RoadMarkSystem m_RoadMarkSystem;
 
         private EntityQuery m_LaneQuery;
         private EntityQuery m_RoadQuery;
@@ -301,9 +401,11 @@ namespace LiveTrafficRouting
         private ComponentLookup<CarLane> m_CarLaneData;
 
         private NativeParallelHashMap<Entity, LiveLane> m_Live;
+        private NativeParallelHashMap<Entity, UsualDemand> m_Usual;
         private NativeArray<float> m_Stats;
         private JobHandle m_LastJob;
         private bool m_Active;
+        private string m_LastSettingsLabel;
         private uint m_NextPruneFrame;
 
         public override int GetUpdateInterval(SystemUpdatePhase phase) => kUpdateInterval;
@@ -315,6 +417,8 @@ namespace LiveTrafficRouting
             m_TimeSystem = World.GetOrCreateSystemManaged<TimeSystem>();
             m_PathfindQueueSystem = World.GetOrCreateSystemManaged<PathfindQueueSystem>();
             m_VanillaSystem = World.GetOrCreateSystemManaged<TrafficFlowSystem>();
+            m_ForecastSystem = World.GetOrCreateSystemManaged<DemandForecastSystem>();
+            m_RoadMarkSystem = World.GetOrCreateSystemManaged<RoadMarkSystem>();
 
             m_LaneQuery = GetEntityQuery(new EntityQueryDesc
             {
@@ -341,7 +445,8 @@ namespace LiveTrafficRouting
             m_CarLaneData = GetComponentLookup<CarLane>(false);
 
             m_Live = new NativeParallelHashMap<Entity, LiveLane>(16384, Allocator.Persistent);
-            m_Stats = new NativeArray<float>(4, Allocator.Persistent);
+            m_Usual = new NativeParallelHashMap<Entity, UsualDemand>(8192, Allocator.Persistent);
+            m_Stats = new NativeArray<float>(7, Allocator.Persistent);
 
             RequireAnyForUpdate(m_LaneQuery, m_RoadQuery);
             Logger.Info("LiveTrafficFlowSystem created.");
@@ -352,6 +457,7 @@ namespace LiveTrafficRouting
             m_LastJob.Complete();
             if (m_VanillaSystem != null) m_VanillaSystem.Enabled = true;
             m_Live.Dispose();
+            m_Usual.Dispose();
             m_Stats.Dispose();
             base.OnDestroy();
         }
@@ -362,11 +468,21 @@ namespace LiveTrafficRouting
             // Entity ids from the previous city mean nothing in the next one.
             m_LastJob.Complete();
             m_Live.Clear();
+            m_Usual.Clear();
         }
 
         protected override void OnUpdate()
         {
             LiveTrafficSettings settings = Mod.Settings;
+            if (settings != null)
+            {
+                string label = settings.RunLabel();
+                if (label != m_LastSettingsLabel)
+                {
+                    Logger.Info($"Settings in use: {label}");
+                    m_LastSettingsLabel = label;
+                }
+            }
             bool wantActive = settings == null || settings.IsActive;
             if (!SetActive(wantActive))
             {
@@ -377,6 +493,8 @@ namespace LiveTrafficRouting
 
             float liveTrust = 0.75f, reactionSpeed = 0.5f, maxSlowdownFactor = 10f, penaltyStrength = 1f;
             settings?.GetTuning(out liveTrust, out reactionSpeed, out maxSlowdownFactor, out penaltyStrength);
+            float spread = 0.5f, neighbourhoods = 0.5f;
+            settings?.GetForecastTuning(out spread, out neighbourhoods);
             // A lane at speed (1 - offset/256) takes 1/(1 - offset/256) times as long, so
             // "at most F times slower" means offset <= 256 * (1 - 1/F).
             int maxOffset = math.clamp((int)math.floor(256f * (1f - 1f / math.max(1f, maxSlowdownFactor))), 0, 255);
@@ -418,7 +536,7 @@ namespace LiveTrafficRouting
 
             if (frame >= m_NextPruneFrame)
             {
-                dependency = new PruneJob { m_Live = m_Live, m_Frame = frame }.Schedule(dependency);
+                dependency = new PruneJob { m_Live = m_Live, m_Usual = m_Usual, m_Frame = frame }.Schedule(dependency);
                 m_NextPruneFrame = frame + kPruneEveryFrames;
             }
 
@@ -435,10 +553,18 @@ namespace LiveTrafficRouting
             };
             JobHandle lanesHandle = lanesJob.Schedule(m_LaneQuery, dependency);
 
+            NativeParallelHashMap<Entity, float> demand = m_ForecastSystem.GetDemand(out JobHandle demandDeps);
+            NativeParallelHashMap<Entity, byte> marks = m_RoadMarkSystem.GetMarks(out JobHandle marksDeps);
+            JobHandle roadsDeps = JobHandle.CombineDependencies(lanesHandle, demandDeps, marksDeps);
+
             FlowAction action = new FlowAction(Allocator.Persistent);
             var roadsJob = new UpdateRoadsJob
             {
+                m_EntityType = m_EntityType,
                 m_SubLaneType = m_SubLaneType,
+                m_Demand = demand,
+                m_Marks = marks,
+                m_Usual = m_Usual,
                 m_LaneFlowData = m_LaneFlowData,
                 m_SecondaryFlowData = m_SecondaryFlowData,
                 m_MasterLaneData = m_MasterLaneData,
@@ -453,8 +579,16 @@ namespace LiveTrafficRouting
                 m_PenaltyStrength = penaltyStrength,
                 m_MaxSlowdownFactor = math.max(1f, maxSlowdownFactor),
                 m_MaxOffset = maxOffset,
+                m_ForecastAlpha = spread * kMaxForecastAlpha,
+                m_NeighbourhoodK = neighbourhoods * kMaxNeighbourhoodK,
+                m_Dither = spread * kMaxDither,
+                m_HorizonCapacity = DemandForecastSystem.kHorizonSeconds * kSaturationFlow,
+                m_Rotation = rotation,
+                m_Frame = frame,
             };
-            JobHandle roadsHandle = roadsJob.Schedule(m_RoadQuery, lanesHandle);
+            JobHandle roadsHandle = roadsJob.Schedule(m_RoadQuery, roadsDeps);
+            m_ForecastSystem.AddDemandReader(roadsHandle);
+            m_RoadMarkSystem.AddReader(roadsHandle);
             if (timer != null)
             {
                 roadsHandle.Complete();
@@ -475,6 +609,7 @@ namespace LiveTrafficRouting
             {
                 m_LastJob.Complete();
                 m_Live.Clear();
+                m_Usual.Clear();
                 m_Active = active;
                 Logger.Info(active
                     ? "Live traffic ON: vanilla TrafficFlowSystem disabled."
@@ -485,15 +620,22 @@ namespace LiveTrafficRouting
             return active;
         }
 
+        /// <summary>Length of the array <see cref="HarvestStats"/> fills.</summary>
+        internal const int kHarvestCount = 8;
+
         /// <summary>
         /// Route-planner view since the last call: [0] lane updates, [1] lanes the planner sees at half speed or worse,
-        /// [2] sum of planner speed, [3] lanes with live traffic, [4] lanes tracked. Resets the counters.
+        /// [2] sum of planner speed, [3] lanes with live traffic, [4] lanes tracked, [5] lane updates priced by the
+        /// forecast, [6] lane updates with the neighbourhood penalty, [7] highest demand/capacity. Resets the counters.
         /// </summary>
         internal void HarvestStats(float[] into)
         {
             m_LastJob.Complete();
             for (int i = 0; i < 4; i++) into[i] = m_Stats[i];
-            into[4] = m_Live.IsCreated ? m_Live.Count() : 0;
+            into[4] = (m_Live.IsCreated ? m_Live.Count() : 0) + (m_Usual.IsCreated ? m_Usual.Count() : 0);
+            into[5] = m_Stats[4];
+            into[6] = m_Stats[5];
+            into[7] = m_Stats[6];
             for (int i = 0; i < m_Stats.Length; i++) m_Stats[i] = 0f;
         }
     }

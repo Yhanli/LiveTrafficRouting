@@ -1,2 +1,5 @@
 node_modules/
 build/
+preview/dist/
+preview/renders/
+preview/sample-history.js

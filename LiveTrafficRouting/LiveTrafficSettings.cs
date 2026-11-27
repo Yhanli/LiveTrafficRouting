@@ -5,7 +5,7 @@ using Game.Settings;
 
 namespace LiveTrafficRouting
 {
-    /// <summary>How strongly drivers react to live traffic. Shown as a dropdown.</summary>
+    /// <summary>How strongly drivers react to live traffic. Shown as a dropdown. Auto (v1.1) is last so saved values keep their meaning.</summary>
     public enum TrafficAwareness
     {
         Off,
@@ -13,12 +13,9 @@ namespace LiveTrafficRouting
         Balanced,
         Eager,
         Custom,
+        Auto,
     }
 
-    /// <summary>
-    /// Picking a preset fills in the sliders. Changing a slider by hand switches the preset to Custom
-    /// (unless the values happen to match the preset). The sliders are only greyed out when the mod is Off.
-    /// </summary>
     /// <summary>How long to keep statistics (all cities together).</summary>
     public enum KeepStatistics
     {
@@ -30,6 +27,41 @@ namespace LiveTrafficRouting
         Unlimited,
     }
 
+    /// <summary>All slider values of one setup.</summary>
+    internal struct Tuning
+    {
+        public float LiveTrust;          // %
+        public float ReactionSpeed;      // %
+        public float PenaltyStrength;    // %
+        public float AvoidanceLimit;     // times slower
+        public float RerouteShare;       // %
+        public float RerouteThreshold;   // %
+        public float Spread;             // % (v1.1: forecast of where drivers are about to go)
+        public float Neighbourhoods;     // % (v1.1: keep through traffic out of local streets)
+
+        public Tuning(float liveTrust, float reactionSpeed, float penaltyStrength, float avoidanceLimit, float rerouteShare,
+            float rerouteThreshold, float spread, float neighbourhoods)
+        {
+            LiveTrust = liveTrust;
+            ReactionSpeed = reactionSpeed;
+            PenaltyStrength = penaltyStrength;
+            AvoidanceLimit = avoidanceLimit;
+            RerouteShare = rerouteShare;
+            RerouteThreshold = rerouteThreshold;
+            Spread = spread;
+            Neighbourhoods = neighbourhoods;
+        }
+
+        public bool Matches(Tuning b) =>
+            LiveTrust == b.LiveTrust && ReactionSpeed == b.ReactionSpeed && PenaltyStrength == b.PenaltyStrength &&
+            AvoidanceLimit == b.AvoidanceLimit && RerouteShare == b.RerouteShare && RerouteThreshold == b.RerouteThreshold &&
+            Spread == b.Spread && Neighbourhoods == b.Neighbourhoods;
+    }
+
+    /// <summary>
+    /// Picking a preset fills in the sliders. Changing a slider by hand switches the preset to Custom
+    /// (unless the values happen to match the preset). The sliders are greyed out when the mod is Off or on Auto.
+    /// </summary>
     [FileLocation(nameof(LiveTrafficRouting))]
     [SettingsUIGroupOrder(TrafficGroup, DebugGroup)]
     [SettingsUIShowGroupName(DebugGroup)]
@@ -39,33 +71,14 @@ namespace LiveTrafficRouting
         internal const string TrafficGroup = "Traffic";
         internal const string DebugGroup = "Debug";
 
-        private struct Tuning
-        {
-            public float LiveTrust;          // %
-            public float ReactionSpeed;      // %
-            public float PenaltyStrength;    // %
-            public float AvoidanceLimit;     // times slower
-            public float RerouteShare;       // %
-            public float RerouteThreshold;   // %
-
-            public Tuning(float liveTrust, float reactionSpeed, float penaltyStrength, float avoidanceLimit, float rerouteShare, float rerouteThreshold)
-            {
-                LiveTrust = liveTrust;
-                ReactionSpeed = reactionSpeed;
-                PenaltyStrength = penaltyStrength;
-                AvoidanceLimit = avoidanceLimit;
-                RerouteShare = rerouteShare;
-                RerouteThreshold = rerouteThreshold;
-            }
-        }
-
         // v1 presets, from same-save A/B tests against the mod off (2-3 game days each):
         //  - Relaxed  = the old Balanced: jam warnings -42%, queues and speed unchanged, +8% on local streets.
         //  - Balanced = the old Eager v2: queues -28%, speed +3%, jam warnings -87%, +10% on local streets.
         //  - Eager    = the tested "max" setup: queues -38%, speed +6%, but +33% on local streets.
-        private static readonly Tuning kRelaxed = new Tuning(75f, 50f, 100f, 10f, 30f, 30f);
-        private static readonly Tuning kBalanced = new Tuning(100f, 80f, 250f, 50f, 75f, 15f);
-        private static readonly Tuning kEager = new Tuning(100f, 100f, 1000f, 100f, 100f, 15f);
+        // v1.1 adds "spread over detours" and "keep out of neighbourhoods" (first guesses, to be set by A/B tests).
+        internal static readonly Tuning kRelaxed = new Tuning(75f, 50f, 100f, 10f, 30f, 30f, 25f, 50f);
+        internal static readonly Tuning kBalanced = new Tuning(100f, 80f, 250f, 50f, 75f, 15f, 50f, 50f);
+        internal static readonly Tuning kEager = new Tuning(100f, 100f, 1000f, 100f, 100f, 15f, 50f, 75f);
 
         private bool m_IsLoadingDefaults;
         private TrafficAwareness m_Awareness;
@@ -99,7 +112,7 @@ namespace LiveTrafficRouting
 
         [SettingsUISection(GeneralSection, TrafficGroup)]
         [SettingsUISlider(min = 0f, max = 100f, step = 5f, unit = Game.UI.Unit.kPercentage)]
-        [SettingsUIDisableByCondition(typeof(LiveTrafficSettings), nameof(IsOff))]
+        [SettingsUIDisableByCondition(typeof(LiveTrafficSettings), nameof(SlidersDisabled))]
         public float LiveTrust
         {
             get => m_Tuning.LiveTrust;
@@ -108,7 +121,7 @@ namespace LiveTrafficRouting
 
         [SettingsUISection(GeneralSection, TrafficGroup)]
         [SettingsUISlider(min = 10f, max = 100f, step = 5f, unit = Game.UI.Unit.kPercentage)]
-        [SettingsUIDisableByCondition(typeof(LiveTrafficSettings), nameof(IsOff))]
+        [SettingsUIDisableByCondition(typeof(LiveTrafficSettings), nameof(SlidersDisabled))]
         public float ReactionSpeed
         {
             get => m_Tuning.ReactionSpeed;
@@ -118,7 +131,7 @@ namespace LiveTrafficRouting
         // Multiplies the extra time a jam adds (100% = as measured).
         [SettingsUISection(GeneralSection, TrafficGroup)]
         [SettingsUISlider(min = 25f, max = 1000f, step = 25f, unit = Game.UI.Unit.kPercentage)]
-        [SettingsUIDisableByCondition(typeof(LiveTrafficSettings), nameof(IsOff))]
+        [SettingsUIDisableByCondition(typeof(LiveTrafficSettings), nameof(SlidersDisabled))]
         public float PenaltyStrength
         {
             get => m_Tuning.PenaltyStrength;
@@ -130,16 +143,36 @@ namespace LiveTrafficRouting
         [SettingsUISection(GeneralSection, TrafficGroup)]
         [SettingsUISlider(min = 2f, max = 100f, step = 1f)]
         [SettingsUICustomFormat(fractionDigits = 0, maxValueWithFraction = 0f, separateThousands = false)]
-        [SettingsUIDisableByCondition(typeof(LiveTrafficSettings), nameof(IsOff))]
+        [SettingsUIDisableByCondition(typeof(LiveTrafficSettings), nameof(SlidersDisabled))]
         public float AvoidanceLimit
         {
             get => m_Tuning.AvoidanceLimit;
             set => SetSlider(ref m_Tuning.AvoidanceLimit, value);
         }
 
+        // Forecast of where drivers are about to go: roads many drivers are heading for look busier before they jam.
         [SettingsUISection(GeneralSection, TrafficGroup)]
         [SettingsUISlider(min = 0f, max = 100f, step = 5f, unit = Game.UI.Unit.kPercentage)]
-        [SettingsUIDisableByCondition(typeof(LiveTrafficSettings), nameof(IsOff))]
+        [SettingsUIDisableByCondition(typeof(LiveTrafficSettings), nameof(SlidersDisabled))]
+        public float Spread
+        {
+            get => m_Tuning.Spread;
+            set => SetSlider(ref m_Tuning.Spread, value);
+        }
+
+        // Local streets that get much more traffic than usual look slower, so through traffic stays on main roads.
+        [SettingsUISection(GeneralSection, TrafficGroup)]
+        [SettingsUISlider(min = 0f, max = 100f, step = 5f, unit = Game.UI.Unit.kPercentage)]
+        [SettingsUIDisableByCondition(typeof(LiveTrafficSettings), nameof(SlidersDisabled))]
+        public float Neighbourhoods
+        {
+            get => m_Tuning.Neighbourhoods;
+            set => SetSlider(ref m_Tuning.Neighbourhoods, value);
+        }
+
+        [SettingsUISection(GeneralSection, TrafficGroup)]
+        [SettingsUISlider(min = 0f, max = 100f, step = 5f, unit = Game.UI.Unit.kPercentage)]
+        [SettingsUIDisableByCondition(typeof(LiveTrafficSettings), nameof(SlidersDisabled))]
         public float RerouteShare
         {
             get => m_Tuning.RerouteShare;
@@ -148,7 +181,7 @@ namespace LiveTrafficRouting
 
         [SettingsUISection(GeneralSection, TrafficGroup)]
         [SettingsUISlider(min = 10f, max = 100f, step = 5f, unit = Game.UI.Unit.kPercentage)]
-        [SettingsUIDisableByCondition(typeof(LiveTrafficSettings), nameof(IsOff))]
+        [SettingsUIDisableByCondition(typeof(LiveTrafficSettings), nameof(SlidersDisabled))]
         public float RerouteThreshold
         {
             get => m_Tuning.RerouteThreshold;
@@ -240,14 +273,28 @@ namespace LiveTrafficRouting
 
         public bool IsOff() => m_Awareness == TrafficAwareness.Off;
 
+        /// <summary>The sliders do nothing when the mod is off, and Auto picks its own values.</summary>
+        public bool SlidersDisabled() => m_Awareness == TrafficAwareness.Off || m_Awareness == TrafficAwareness.Auto;
+
+        internal bool IsAuto => m_Awareness == TrafficAwareness.Auto;
+
+        /// <summary>The values in use right now: the sliders, or Auto's current setup.</summary>
+        private Tuning Active => IsAuto ? AutoTuner.Current : m_Tuning;
+
         /// <summary>Describes the active setup, for statistics runs: a run = one setup.</summary>
         internal string RunLabel()
         {
             if (m_Awareness == TrafficAwareness.Off) return "Native (mod off)";
-            Tuning t = m_Tuning;
+            // Auto changes its values every game hour: it is one run, the hour's values go in their own column.
+            if (IsAuto) return "Auto (self-tuning)";
+            return Describe(m_Awareness.ToString(), m_Tuning);
+        }
+
+        internal static string Describe(string name, Tuning t)
+        {
             return string.Format(CultureInfo.InvariantCulture,
-                "{0}: live {1:0}%, react {2:0}%, penalty {3:0}%, cap {4:0}x, nav {5:0}%, re-route at +{6:0}%",
-                m_Awareness, t.LiveTrust, t.ReactionSpeed, t.PenaltyStrength, t.AvoidanceLimit, t.RerouteShare, t.RerouteThreshold);
+                "{0}: live {1:0}%, react {2:0}%, penalty {3:0}%, cap {4:0}x, nav {5:0}%, re-route at +{6:0}%, spread {7:0}%, neighbourhoods {8:0}%",
+                name, t.LiveTrust, t.ReactionSpeed, t.PenaltyStrength, t.AvoidanceLimit, t.RerouteShare, t.RerouteThreshold, t.Spread, t.Neighbourhoods);
         }
 
         /// <summary>
@@ -257,7 +304,7 @@ namespace LiveTrafficRouting
         internal void ReapplyPickedPreset()
         {
             if (!TryGetPreset(m_PickedAwareness, out Tuning preset)) return;
-            if (m_Awareness == m_PickedAwareness && Matches(m_Tuning, preset)) return;
+            if (m_Awareness == m_PickedAwareness && m_Tuning.Matches(preset)) return;
             m_Awareness = m_PickedAwareness;
             m_Tuning = preset;
             Save();
@@ -268,17 +315,27 @@ namespace LiveTrafficRouting
         /// <summary>Route-cost tuning used by the traffic system.</summary>
         internal void GetTuning(out float liveTrust, out float reactionSpeed, out float maxSlowdownFactor, out float penaltyStrength)
         {
-            penaltyStrength = m_Tuning.PenaltyStrength / 100f;
-            liveTrust = m_Tuning.LiveTrust / 100f;
-            reactionSpeed = m_Tuning.ReactionSpeed / 100f;
-            maxSlowdownFactor = m_Tuning.AvoidanceLimit;
+            Tuning t = Active;
+            penaltyStrength = t.PenaltyStrength / 100f;
+            liveTrust = t.LiveTrust / 100f;
+            reactionSpeed = t.ReactionSpeed / 100f;
+            maxSlowdownFactor = t.AvoidanceLimit;
+        }
+
+        /// <summary>Forecast tuning: spread over detours and keep out of neighbourhoods, both 0-1.</summary>
+        internal void GetForecastTuning(out float spread, out float neighbourhoods)
+        {
+            Tuning t = Active;
+            spread = t.Spread / 100f;
+            neighbourhoods = t.Neighbourhoods / 100f;
         }
 
         /// <summary>Mid-trip re-routing: share of drivers with live navigation, and how much slower the way ahead must get.</summary>
         internal void GetRerouteTuning(out float share, out float threshold)
         {
-            share = m_Tuning.RerouteShare / 100f;
-            threshold = m_Tuning.RerouteThreshold / 100f;
+            Tuning t = Active;
+            share = t.RerouteShare / 100f;
+            threshold = t.RerouteThreshold / 100f;
         }
 
         public override void SetDefaults()
@@ -311,17 +368,12 @@ namespace LiveTrafficRouting
             field = value;
             // Hand-tuned values no longer match the preset: show Custom. (Matching values keep the preset,
             // which also makes loading a saved file safe whatever order the properties are read in.)
-            if (TryGetPreset(m_Awareness, out Tuning preset) && !Matches(m_Tuning, preset))
+            if (TryGetPreset(m_Awareness, out Tuning preset) && !m_Tuning.Matches(preset))
             {
                 m_Awareness = TrafficAwareness.Custom;
             }
             Save();
         }
-
-        private static bool Matches(Tuning a, Tuning b) =>
-            a.LiveTrust == b.LiveTrust && a.ReactionSpeed == b.ReactionSpeed && a.PenaltyStrength == b.PenaltyStrength &&
-            a.AvoidanceLimit == b.AvoidanceLimit &&
-            a.RerouteShare == b.RerouteShare && a.RerouteThreshold == b.RerouteThreshold;
 
         private void Save()
         {
