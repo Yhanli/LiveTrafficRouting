@@ -3,6 +3,9 @@
 Game version studied: **1.6.4f1**. Source: `Game.dll` decompiled with ILSpy (`ilspycmd 9.1`) to
 `..\_decompiled\Game-1.6.4f1\` (reference only, outside this repo, never commit or publish it).
 
+This file is about how the game works and how each system is implemented. What we chose and why (thresholds, rules,
+test results) is in `decisions.md`.
+
 ## TL;DR
 
 - **Vanilla already does congestion-aware routing, but it uses typical traffic, not live traffic.** Every car
@@ -103,8 +106,17 @@ where the car is, using the same plumbing as when a player deletes a road.
   `time = 1 + (time − 1) × penaltyStrength`, capped at the "Avoid jams up to" factor; `FlowOffset = 256 − 256/time`.
   (Blending speeds, as in the first version, capped a full jam at 1/(1 − liveTrust): only 4× on Balanced.)
 - Both jobs are scheduled single-threaded (they share the hash map), which is fine for ~1/16 of the lanes per run.
-- Not yet: occupancy (counting queued cars) on top of the speed signal. Revisit if jams that cars avoid entirely
-  "recover" too quickly in the live data.
+- v1.1, instead of occupancy: a **forecast** of planned demand (`DemandForecastSystem`). Every road vehicle's route
+  (current lane, `CarNavigationLane` buffer, then `PathElement`s) is walked up to 120 s of congested drive time; each
+  lane reached counts 1. Double-buffered, one `UpdateFrame` group per run, so the published count covers all vehicles
+  and is at most ~2 rotations old. Keys are path targets: master lanes for grouped lanes; `UpdateRoadsJob` gives slave
+  lanes their own count plus the master's count split over the group.
+- Cost pipeline in `ApplyLane` (v1.1): speed factor (above) → `max` with the forecast `1 + α·(v/c)⁴` (capacity =
+  120 s × 0.5 vehicles/s, a first guess) → local streets × `1 + k·excess/capacity`, where excess is planned demand above
+  1.2 × usual + 2 (usual = per-lane slow average of the demand, 1/64 per visit, in memory) → player road marks →
+  ±10% × spread dithering per lane and rotation on lanes above 1.2× → clamp. A closed road mark gives offset 255.
+- Why a forecast and not occupancy: an avoided lane gets no speed samples and resets to free flow, so all drivers
+  flee to the same detour until it jams too. Planned demand sees the herd before it arrives.
 - Known minor issue: `TriggerSystem` calls vanilla `TrafficFlowSystem.RefreshCityTrafficAverages()`, which reads
   `Road` without waiting for our job. In release builds this is at worst a slightly stale city average.
 
@@ -125,15 +137,22 @@ where the car is, using the same plumbing as when a player deletes a road.
 - Re-plan when the cooldown has passed and either (a) ratio ≥ baseline × (1 + threshold) with ≥ 20 s extra delay
   vs baseline, or (b) standing jam: ratio ≥ 1 + 2 × threshold with ≥ 40 s extra vs free flow. Remaining trip ≥ 30 s.
   Cooldown 4,096 frames, doubled after each re-plan that found no better route (max 8×), reset after a better one.
-  At most 64 re-plans per run.
+  At most 64 re-plans per run (v1.0). v1.1: 8-128 per run, from the smoothed share of re-plans whose new path is not
+  back one run later (`EvaluateJob`); emergency vehicles have their own 16.
+- v1.1: rule (a) waits for a junction with a choice: one of the next 8 path elements is a node lane (no `EdgeLane`) whose
+  owner node has 3+ `ConnectedEdge`s. v1.1: rule (b) (standing jam) did not wait; in the first test hour ~half of all
+  re-routes found nothing faster. Later in v1.1: rule (b) waits for a choice too, and no car re-routes while inside a junction
+  or stopped first in line (road lane, curve position >= 0.9). Stats per rule: `reroute_jam*`, `reroute_at_junction`.
 - Re-plan steps copy `CarNavigationSystem`'s invalid-path handling: `VehicleUtils.ClearNavigationForPathfind` (keeps
   braking distance), clear `PathElement`, `m_ElementIndex = 0`, set `PathFlags.Obsolete`. `PersonalCarAISystem.FindNewPath`
   then requests a path from the current location to the same target.
 - Tracking: one run later (~64 frames) the new path's estimated time is compared with the old one and logged
   (found faster route / no better route, average time saved).
 - Not covered: public transport (by design: fixed lines and stops, and they already use `IgnoreFlow`).
-  Service vehicles (garbage, post, police, fire, ambulance, hearse, maintenance) not yet: review each AI system's
-  `FindNewPath`/dispatch handling first.
+- v1.1: ambulances, fire engines and police cars on an emergency run (`CarFlags.Emergency`, not returning, at the target,
+  extinguishing etc.). `AmbulanceAISystem` re-plans through `VehicleUtils.RequireNewPath` → `FindNewPath`, the same
+  mechanism. None of the dispatch systems set `IgnoreFlow`, so dispatch and new service trips already used live costs.
+  Garbage, post, hearse and maintenance vehicles are still not covered (routes through several stops).
 - Risk: medium. Touches `PathOwner` state that many AI systems read. Needs care with parked, parking and
   trailer vehicles, and anything with `PathFlags.Pending`.
 
@@ -151,12 +170,78 @@ where the car is, using the same plumbing as when a player deletes a road.
 ## 7. Open questions to check in game
 
 1. How big are typical `LaneFlow` sample values per update on a busy road vs a quiet one (log a few lanes)?
+   Partly answered: summed over a junction lane, `LaneFlow.m_Next.y` counts cars (distance / lane length per car);
+   a jammed junction lane passes 10-50 cars per game hour.
 2. What do the traffic info view colors read from: `Road.m_TrafficFlow*` only, or also `CarLane.m_FlowOffset`?
    (`LaneProperty.FlowOffset` in rendering is a random seed, so most likely the former.)
-3. Pathfind queue load: how many pathfind requests per second does a 100k city already make? That sets the
-   re-route budget.
+3. Pathfind queue load. Answered for the test city (~100k): the re-route budget (8-128 per run, from how many new
+   paths come back within one run) stayed at 128 in every hour, so re-routes don't overload it.
 4. Compatibility with other traffic mods (for example krzychu124's "Traffic"): check whether any of them also
-   touch `TrafficFlowSystem` or `FlowOffset`.
+   touch `TrafficFlowSystem` or `FlowOffset`. Lane connections made with Traffic's lane connector show up as normal
+   junction lanes to the bottleneck finder (seen at the Ashbourne junction).
+
+## 8. Bottleneck finder (v1.1): how it reads the game
+
+What it detects and why each rule exists is in `decisions.md` ("Bottleneck finder"). This section is the game data it
+relies on.
+
+- **Queue head:** from a queued car (`BlockerType.Continuing`, < 1 m/s) follow `Blocker.m_Blocker` while the car ahead
+  is a vehicle with a `Blocker` moving slower than max(3 m/s, 40% of its lane's limit), up to 256 cars. The last car
+  is the head; its blocker type and lane give the cause. The place is the junction (node) or the street (aggregate) of
+  the head's lane; 2-road nodes map to their street.
+- **Blocker types seen:** Signal (red light), Oncoming (turning across), Crossing (another car's path), Spawn (leaving a
+  building), Temporary (a pedestrian: `CarLaneSpeedIterator.CheckPedestrian` makes the person, a `Creature`, the
+  blocker). A stopped bus at a stop is itself the head of the chain (it has a `Blocker` and is stopped).
+- **Pedestrian lanes:** `PedestrianLane.m_Flags` has `Crosswalk` for marked crossings and `Unsafe` for crossings with
+  no crosswalk; the blocking person's lane is `HumanCurrentLane.m_Lane`.
+- **Lane merges:** inside a road piece, a lane that merges into another ends at the same path node
+  (`Game.Net.Lane.m_EndNode`) as that lane. So lanes into a junction are counted by distinct end node, and a head on a
+  lane whose end node another lane of the same piece shares is waiting to merge. Lane curves run in the driving
+  direction; left is counter-clockwise seen from above (x east, z north).
+- **Group ("master") lanes:** where cars can change between several lanes, the road piece and the junction also hold a
+  `MasterLane` that stands for the group (`m_MinIndex..m_MaxIndex` into the owner's `SubLane` buffer); the real lanes
+  have `SlaveLane`. Path elements may name the master lane. A master lane has its own end node and the union of its
+  group's turns, so it must be left out of every lane count (it showed up as a phantom extra lane).
+- **Junction lanes:** car lanes in the node's `SubLane` buffer without `EdgeLane`; a road lane feeds a junction lane
+  when the road lane's `m_EndNode` equals the junction lane's `m_StartNode`. The turn is read from the curve's shape
+  (start vs end direction), with the lane's turn flags as fallback.
+- **Turn throughput:** `LaneFlow.m_Next.y` grows by distance / lane length for each car on the lane, so summed growth is
+  cars; `TrafficFlowSystem` clears it every 512 frames per lane group, so it is read every 16 frames and a drop counts
+  the new value.
+- **Origin / destination:** origin = district (`BorderDistrict` of the edge) or street where the trip (same `Target`)
+  was first seen, else the building that owns the path (cargo yards, parking lots), else "outside the city" within 600 m
+  of the map edge (+-7168 m; outside connections enter on unnamed paths such as "Invisible Pathway"). Trips already
+  driving at the first sample are unknown. Destination: `Target` -> `PropertyRenter.m_Property` -> `CurrentDistrict`,
+  else `Building.m_RoadEdge`'s street.
+- **Detours:** route ahead = current lane, `CarNavigationLane`s, `PathElement`s from `m_ElementIndex`, the end point of
+  each lane's `Curve` (max 60 points / 6 km), 200 routes per sample. Pairs already joined by one road piece are dropped.
+- **Despawns:** `StuckMovingObjectSystem` sets `PathFlags.Stuck` (a blocked loop, or a chain of 100+ blocked vehicles)
+  and the car is deleted; a failed route sets `PathFlags.Failed`. Deleted vehicles are visible for one frame in
+  Modification1 with `Deleted`.
+- **Vehicle kinds:** buses/trams have `PublicTransport`; service vehicles that stop at buildings have `GarbageTruck`,
+  `PostVan`, `MaintenanceVehicle` or `Hearse`; trucks are counted by `DeliveryTruck` (to be confirmed for cargo-station
+  trucks).
+- Checks to do in game (log with "Write traffic report to log"): share of queued cars without a head place, chains cut
+  at the cap, destination/origin known shares, cost per sample, whether the top cause matches the map.
+
+## 9. Other game facts found while testing v1.1
+
+What we concluded from them is in `decisions.md` ("Measurement", "How we test").
+
+- **The route planner also picks the travel mode.** Residents' pathfinding is multimodal (car, taxi, public
+  transport, walking) and dots the same time cost with their `PathfindWeights`, so a higher cost on jammed car lanes
+  also makes car trips lose to the other modes.
+- **Bicycles are personal cars:** `PersonalCar` + `Bicycle` (`BicyclePrefab` builds a `Car` archetype and
+  `PersonalCarAISystem` drives it). Exclude `Bicycle` in every car query.
+- **Road speed limits are stored at about twice the shown value:** `CarLane.m_SpeedLimit` for a small road shown as
+  40 km/h is ~80 km/h (22.2 m/s). In a city of mostly small roads, 98% of cars drove on lanes stored above 70 km/h.
+  The game converts with x3.6 everywhere, so the doubling is in the prefab data, not in code.
+- **Waiting at a stop** is `ResidentFlags.WaitingTransport` on the resident (`Game.Creatures.Resident`); the lane's
+  `Transport` / `Taxi` flags only mark the boarding step.
+- **People outside:** walkers are `Human` + `Resident` without `CurrentVehicle`; people waiting for a path have
+  `PathFlags.Pending` (often still `Unspawned`, inside a building).
+- **Lanes in a road piece:** `Game.Net.SubLane` of the edge; a road piece's `Curve.m_Length` is its length.
+- **The game rewrites every log file on start**; nothing keeps the previous one unless the mod copies it.
 
 ## Key files (decompiled)
 
