@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Map overlay preview</title>
+<style>
+    body { margin: 0; background: #22301f; color: #ddd; font: 13px "Segoe UI", sans-serif; }
+    #title { position: fixed; left: 10px; top: 8px; }
+    canvas { display: block; }
+</style>
+</head>
+<body>
+<div id="title"></div>
+<canvas id="c"></canvas>
+<script>
+// Top-down drawing of the shapes BottleneckOverlaySystem exports to overlay-preview.json (game x/z in metres).
+// Open overlay.html?file=overlay-preview.json (copied from ModsData/LiveTrafficRouting) or the default sample.
+const file = new URLSearchParams(location.search).get("file") || "overlay-sample.json";
+fetch(file).then(r => r.json()).then(draw).catch(e => { document.getElementById("title").textContent = "Could not load " + file + ": " + e; });
+
+function bez(p, t) {
+    const u = 1 - t;
+    return [0, 1, 2].map(k => u*u*u*p[0][k] + 3*u*u*t*p[1][k] + 3*u*t*t*p[2][k] + t*t*t*p[3][k]);
+}
+
+function draw(data) {
+    document.getElementById("title").textContent = data.title + "  (" + data.shapes.length + " shapes)";
+    const pts = data.shapes.flatMap(s => s.p);
+    const xs = pts.map(p => p[0]), zs = pts.map(p => p[2]);
+    const pad = 60, W = 900, H = 700;
+    const minX = Math.min(...xs), maxX = Math.max(...xs), minZ = Math.min(...zs), maxZ = Math.max(...zs);
+    const scale = Math.min((W - 2 * pad) / Math.max(1, maxX - minX), (H - 2 * pad) / Math.max(1, maxZ - minZ));
+    const c = document.getElementById("c");
+    c.width = W; c.height = H;
+    const g = c.getContext("2d");
+    g.fillStyle = "#2f4029"; g.fillRect(0, 0, W, H);
+    // Game z grows north; screen y grows down.
+    const sx = x => pad + (x - minX) * scale, sy = z => H - pad - (z - minZ) * scale;
+    for (const s of data.shapes) {
+        const [r, gr, b, a] = s.color;
+        g.strokeStyle = g.fillStyle = `rgba(${r * 255},${gr * 255},${b * 255},${a})`;
+        g.lineWidth = Math.max(1, s.w * scale);
+        g.lineCap = "butt";
+        if (s.circle) {
+            g.beginPath(); g.arc(sx(s.p[0][0]), sy(s.p[0][2]), s.w * scale / 2, 0, Math.PI * 2);
+            if (s.outline > 0) { g.lineWidth = Math.max(1, s.outline * scale); g.stroke(); }
+            else { g.fill(); g.strokeStyle = "rgba(13,13,13,0.55)"; g.lineWidth = Math.max(1, s.w * 0.3 * scale); g.stroke(); }
+            continue;
+        }
+        const path = () => {
+            g.beginPath();
+            for (let i = 0; i <= 24; i++) {
+                const p = bez(s.p, i / 24);
+                if (i === 0) g.moveTo(sx(p[0]), sy(p[2])); else g.lineTo(sx(p[0]), sy(p[2]));
+            }
+        };
+        g.lineCap = s.dashed ? "butt" : "round"; g.lineJoin = "round";
+        g.setLineDash(s.dashed ? [s.w * 3 * scale, s.w * 2 * scale] : []);
+        // dark outline (30% of the width each side), then the colour
+        if (!s.plain) { g.strokeStyle = "rgba(13,13,13,0.55)"; g.lineWidth = Math.max(1, s.w * 1.6 * scale); path(); g.stroke(); }
+        g.strokeStyle = `rgba(${r * 255},${gr * 255},${b * 255},${a})`; g.lineWidth = Math.max(1, s.w * scale); path(); g.stroke();
+    }
+    g.setLineDash([]);
+    g.fillStyle = "#ddd";
+    g.fillText(`${Math.round(50)} m`, 20, H - 12);
+    g.fillRect(20, H - 30, 50 * scale, 3);
+}
+</script>
+</body>
+</html>

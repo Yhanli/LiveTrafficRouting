@@ -393,3 +393,205 @@ $runB: #5ecf8a;
     align-self: center;
     margin-left: 6rem;
 }
+
+/* Temporary roadworks: always shown as temporary (marks are not saved). */
+.temporary {
+    font-size: 11rem;
+    color: #f0c060;
+    border: 1rem solid rgba(240, 192, 96, 0.5);
+    border-radius: 3rem;
+    padding: 3rem 6rem;
+    margin-bottom: 6rem;
+}
+
+/* Traffic news line on the Now tab. */
+.news {
+    font-size: 12rem;
+    color: #9fd3ff;
+    margin-bottom: 4rem;
+}
+
+/* Causes tab: the selected bottleneck or link (shown on the map). */
+.rowOn {
+    background-color: rgba(120, 200, 255, 0.18);
+}
+
+.detailBox {
+    margin-top: 6rem;
+    padding: 6rem 8rem;
+    border-radius: 4rem;
+    background-color: rgba(255, 255, 255, 0.06);
+}
+
+.detailTitle {
+    font-size: 13rem;
+    font-weight: bold;
+    color: rgba(255, 255, 255, 0.9);
+    margin-bottom: 4rem;
+}
+
+.advice {
+    font-size: 11rem;
+    color: rgba(255, 225, 140, 0.95);
+    margin-bottom: 4rem;
+}
+
+.legend {
+    font-size: 10rem;
+    color: rgba(255, 255, 255, 0.45);
+    margin-top: 2rem;
+}
+
+.subLine {
+    font-size: 11rem;
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.adviceBox {
+    margin-top: 4rem;
+}
+
+.tryLine {
+    font-size: 11rem;
+    color: rgba(190, 235, 190, 0.95);
+    margin-bottom: 2rem;
+}
+
+/* Clickable names in the Causes details. */
+.chipRow {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-bottom: 3rem;
+}
+
+.chipLabel {
+    font-size: 11rem;
+    color: rgba(255, 255, 255, 0.55);
+    margin-right: 4rem;
+}
+
+.chip {
+    font-size: 11rem;
+    color: #9fd3ff;
+    background-color: rgba(120, 200, 255, 0.12);
+    border-radius: 3rem;
+    padding: 1rem 5rem;
+    margin: 1rem 3rem 1rem 0;
+    cursor: pointer;
+}
+
+.chip:hover {
+    background-color: rgba(120, 200, 255, 0.28);
+}
+
+.chipPlain {
+    font-size: 11rem;
+    color: rgba(255, 255, 255, 0.7);
+    padding: 1rem 5rem;
+    margin: 1rem 3rem 1rem 0;
+}
+
+/* Causes details: section labels and the colour legend. */
+.sectionLabel {
+    font-size: 10rem;
+    font-weight: bold;
+    color: rgba(255, 255, 255, 0.45);
+    text-transform: uppercase;
+    margin-top: 6rem;
+    margin-bottom: 3rem;
+}
+
+.legendBox {
+    margin-top: 4rem;
+}
+
+.legendRow {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.legendItem {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    margin: 1rem 8rem 1rem 0;
+}
+
+.swatch {
+    width: 16rem;
+    height: 5rem;
+    border-radius: 3rem;
+    margin-right: 4rem;
+}
+
+.swatchDashed {
+    width: 16rem;
+    height: 0;
+    border-top: 3rem dashed;
+    margin-right: 4rem;
+}
+
+.swatchRing {
+    width: 11rem;
+    height: 11rem;
+    border: 2rem solid;
+    border-radius: 50%;
+    margin: 0 4rem 0 0;
+}
+
+.legendText {
+    font-size: 10rem;
+    color: rgba(255, 255, 255, 0.6);
+    margin-right: 4rem;
+}
+
+// Status of a place in the ongoing ranking: a coloured badge in front of its sub line.
+.subRow {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+}
+
+.status {
+    font-size: 10rem;
+    font-weight: bold;
+    border-radius: 3rem;
+    padding: 0 5rem;
+    margin-right: 6rem;
+}
+
+.statusBetter {
+    color: #8ff0a4;
+    background-color: rgba(60, 200, 90, 0.22);
+}
+
+.statusWorse {
+    color: #ff9a8a;
+    background-color: rgba(240, 80, 60, 0.25);
+}
+
+.statusCleared {
+    color: #b9f5c8;
+    background-color: rgba(60, 200, 90, 0.35);
+}
+
+.rowCleared {
+    opacity: 0.6;
+}
+
+.warnText { color: #f2c46a; }
+
+// Other signals on a place's line: cars the game removed (red), fix ideas (blue).
+.statusRemoved {
+    color: #ff9a8a;
+    background-color: rgba(240, 80, 60, 0.18);
+}
+
+.statusIdea {
+    color: #9fd3ff;
+    background-color: rgba(120, 200, 255, 0.18);
+}

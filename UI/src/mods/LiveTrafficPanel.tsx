@@ -12,12 +12,19 @@ const current$ = bindValue<string>(GROUP, "current", "{}");
 const history$ = bindValue<string>(GROUP, "history", "[]");
 const runs$ = bindValue<string>(GROUP, "runs", "[]");
 const hotspots$ = bindValue<string>(GROUP, "hotspots", "{}");
+const roadworks$ = bindValue<string>(GROUP, "roadworks", '{"cleared":0,"roads":[]}');
+const roadworksToolOn$ = bindValue<boolean>(GROUP, "roadworksToolOn", false);
+const roadworksMode$ = bindValue<number>(GROUP, "roadworksMode", 1);
+const modActive$ = bindValue<boolean>(GROUP, "modActive", true);
+const bottlenecks$ = bindValue<string>(GROUP, "bottlenecks", '{"time":"","rows":[],"links":[]}');
+const overlayShown$ = bindValue<string>(GROUP, "overlayShown", "");
 
 const ICON = "Media/Game/Icons/Traffic.svg";
 
 interface Current {
     mode?: string; preset?: string; settings?: string; run?: string; t?: string; veh?: number; speed?: number;
     queued?: number; local?: number; jams?: number; navKmh?: number; otherKmh?: number; navShare?: number; ms?: number;
+    news?: string; auto?: string;
 }
 interface Capture {
     t: string; run: string; h: number; mode: string; preset: string; n: number; veh: number; speed: number; queued: number;
@@ -31,20 +38,138 @@ interface Capture {
     lTrips: number; lPlaces: number; lTop5: number; lKm: number;
     // Performance (-1 = not measured)
     spd: number; simFps: number; fps: number; cpu: number; modMb: number; gameMb: number;
+    // v1.1 (-1 = hour recorded before these were measured)
+    planFc: number; planLocal: number; fcMaxVc: number; fcVeh: number;
+    rrEmerg: number; rrDefer: number; rrBudget: number; carPax: number; transitPax: number; transit: number; auto: string;
+    // v1.1 (-1 = not measured): vehicles the game removed (stuck, route failed, trip done), failed / lost re-routes
+    dsStuck?: number; dsFailed?: number; rmDone?: number; rrFailed?: number; rrGone?: number;
+    // people cycling, walking, waiting for a route; share of everyone on the move riding in cars
+    bikePax?: number; walking?: number; waitTransit?: number; waitRoute?: number; carShare?: number;
 }
-interface Hotspot { p: string; k: string; q: number; j: number; h: number; }
+interface MarkedRoad { id: string; name: string; mark: number; }
+interface Roadworks { cleared: number; roads: MarkedRoad[]; }
+// x/z: where the queue was (game metres, v1.1), to find the right one of several streets with the same name.
+interface Hotspot { p: string; k: string; q: number; j: number; h: number; x?: number; z?: number; }
+// Bottleneck finder (BottleneckSystem.cs): the last finished game hour.
+// A street, district, building or junction with an entity id ("" = not on the map, e.g. outside the city) and a share.
+interface Area { n: string; id: string; p?: number; }
+interface BottleneckRow {
+    id: string; place: string; kind: string; cause: string; mix: string; queued: number; wait?: number; spill: number; through: number;
+    to: string; from: string; moves?: string; lanes?: string; flow?: string; advice?: string;
+    hoursIn?: number; avgWait?: number; endsAt?: string; endsAtId?: string; toList?: Area[]; fromList?: Area[]; queuesOn?: Area[]; despawns?: number; trucks?: number;
+    // ranking: "cleared" (no queue for a few game hours: fixed?), "better", "worse" or ""; hours since last seen; recent stuck/h
+    status?: string; since?: number; recent?: number;
+}
+// type: "link" = a new road could join the two points; "uturn" = drivers can't turn around and loop back;
+// "turn" = the two points are already joined nearby, so a turn is missing at junction "at".
+interface LinkHint {
+    a: string; b: string; aId: string; bId: string; key?: string; gap: number; saving: number; routes: number; same?: number;
+    type?: string; at?: string; ramp?: number; from?: string; to?: string; via?: string;
+    hoursIn?: number; total?: number; streets?: Area[];
+    // the listed bottleneck whose queued drivers this would help (row id and name)
+    forId?: string; forName?: string;
+}
+
+/** One line per detour suggestion, in words that say what to fix. */
+function linkText(l: LinkHint): string {
+    if (l.type === "uturn") return `Can't turn around at ${l.at || l.a} (${l.routes} drivers per hour).`;
+    if (l.type === "turn") return `Missing turn at ${l.at || l.a} (${l.routes} drivers per hour).`;
+    // Both ends on the same street: drivers drive round a bend or loop of it.
+    if (l.a === l.b) return `Possible shortcut across a bend of ${l.a} (${l.routes} drivers per hour).`;
+    return `Possible new road: ${l.a} to ${l.b}${l.ramp ? " (needs a ramp)" : ""} (${l.routes} drivers per hour).`;
+}
+
+/** The longer explanation, with street names, for the detail box. */
+function linkStory(l: LinkHint): string {
+    const via = l.via ? ` via ${l.via}` : "";
+    if (l.type === "uturn") return `Drivers on ${l.from || l.a} want to go back the other way, but can't turn around at ${l.at || l.a}. They drive ${fmt(l.saving, 0)} m round${via} instead.`;
+    if (l.type === "turn") return `Drivers on ${l.from || l.a} want to reach ${l.to || l.b} (${fmt(l.gap, 0)} m away), but can't make the turn at ${l.at || l.a}. They drive ${fmt(l.saving, 0)} m round${via} instead.`;
+    if (l.a === l.b) return `Drivers on ${l.a} follow a long bend or loop of it: ${fmt(l.saving, 0)} m round${via}, while its two ends are only about ${fmt(l.gap, 0)} m apart. A short road across would save that.`;
+    return `Drivers from ${l.from || l.a} to ${l.to || l.b} drive ${fmt(l.saving, 0)} m round${via}. A new road of about ${fmt(l.gap, 0)} m between ${l.a} and ${l.b} would save that${l.ramp ? " (it needs a ramp onto the highway)" : ""}.`;
+}
+
+function linkLegend(l: LinkHint): string {
+    if (l.type === "uturn") return "Try: allow a U-turn there, or build a small roundabout.";
+    if (l.type === "turn") return "Try: allow that turn at the junction (turn rules or lane connections in the Traffic mod), or change the junction.";
+    return "Try: build the new road (with a ramp if it meets a highway). The mod can't see rivers, hills or buildings in the way: check the map first.";
+}
+interface Bottlenecks {
+    time: string; samples?: number; quiet?: number; rows: BottleneckRow[]; links: LinkHint[];
+    // Ranking over the last `window` game hours: places by stuck cars, fixes seen in at least `minHours` of them (-1 = not yet).
+    window?: number; minHours?: number; ongoing?: BottleneckRow[]; ongoingLinks?: LinkHint[];
+}
+
+/** Map legend: a colour swatch per line, matching what is drawn. */
+type LegendItem = { color: string; text: string; ring?: boolean; dashed?: boolean };
+const PLACE_LEGEND: LegendItem[] = [
+    { color: "rgb(242,51,38)", text: "queue (arrows: its direction)" },
+    { color: "rgb(255,217,51)", text: "where it starts", ring: true },
+    { color: "rgb(64,153,255)", text: "turn left" },
+    { color: "rgb(242,242,242)", text: "straight" },
+    { color: "rgb(191,102,255)", text: "turn right" },
+    { color: "rgb(255,217,51)", text: "U-turn" },
+    { color: "rgb(77,217,255)", text: "coming from" },
+    { color: "rgb(255,115,217)", text: "going to" },
+];
+function linkLegendItems(l: LinkHint): LegendItem[] {
+    const items: LegendItem[] = [{ color: "rgb(255,140,26)", text: "the way they drive now" }];
+    if (l.type === "uturn") items.push({ color: "rgb(255,217,51)", text: "where they want to turn around", ring: true });
+    if (l.type === "turn") {
+        items.push({ color: "rgb(77,242,102)", text: "the way they want", dashed: true });
+        items.push({ color: "rgb(255,217,51)", text: "junction that blocks it", ring: true });
+    }
+    if (!l.type || l.type === "link") items.push({ color: "rgb(77,242,102)", text: "new road", dashed: true });
+    return items;
+}
+const Legend = ({ items }: { items: LegendItem[] }) => (
+    <div className={styles.legendBox}>
+        <div className={styles.legendRow}>
+            <div className={styles.legendText}>{"Map:"}</div>
+            {items.map(i => (
+                <div key={i.text} className={styles.legendItem}>
+                    <div className={i.ring ? styles.swatchRing : i.dashed ? styles.swatchDashed : styles.swatch}
+                         style={i.ring || i.dashed ? { borderColor: i.color } : { backgroundColor: i.color }} />
+                    <div className={styles.legendText}>{i.text}</div>
+                </div>
+            ))}
+        </div>
+    </div>
+);
+
+/** Clickable names: each one moves the camera there. Names off the map (outside the city) are plain. */
+const Chips = ({ label, items }: { label: string; items: Area[] }) => (
+    <div className={styles.chipRow}>
+        <div className={styles.chipLabel}>{label}</div>
+        {items.length === 0 ? <div className={styles.chipPlain}>{"unknown"}</div> : items.map(a => (
+            a.id
+                ? <div key={a.n} className={styles.chip} onClick={() => trigger(GROUP, "focusEntity", a.id)}>{a.p !== undefined && a.p >= 0 ? `${a.n} ${fmt(a.p, 0)}%` : a.n}</div>
+                : <div key={a.n} className={styles.chipPlain}>{a.p !== undefined && a.p >= 0 ? `${a.n} ${fmt(a.p, 0)}%` : a.n}</div>
+        ))}
+    </div>
+);
 interface Run { id: string; mode: string; preset: string; settings: string; first: string; last: string; hours: number; pinned?: number; baseline?: number; }
 
 /** Averages over a set of game hours. */
 interface Avg {
     hours: number; speed: number; queued: number; jams: number; local: number; flow: number;
+    veh: number; navShare: number;
     navKmh: number; otherKmh: number; rr: number; rrTrucks: number; rrBetter: number; rrNoBetter: number;
     rrSaved: number; rrHeld: number;
+    // v1.1: averaged only over hours that have them; -1 when none does.
+    transit: number; rrEmerg: number; rrDefer: number; rrBudget: number; planFc: number; planLocal: number;
+    dsStuck: number; dsFailed: number; rrFailed: number; carPax: number; transitPax: number;
+    bikePax: number; walking: number; waitRoute: number; carShare: number;
 }
 type Row = Avg | Capture;
 
-const AVG_KEYS: (keyof Avg)[] = ["speed", "queued", "jams", "local", "flow", "navKmh", "otherKmh", "rr", "rrTrucks", "rrBetter", "rrNoBetter", "rrSaved", "rrHeld"];
-const EMPTY: Avg = { hours: 0, speed: 0, queued: 0, jams: 0, local: 0, flow: 0, navKmh: 0, otherKmh: 0, rr: 0, rrTrucks: 0, rrBetter: 0, rrNoBetter: 0, rrSaved: 0, rrHeld: 0 };
+const AVG_KEYS: (keyof Avg)[] = ["speed", "queued", "jams", "local", "flow", "veh", "navShare", "navKmh", "otherKmh", "rr", "rrTrucks", "rrBetter", "rrNoBetter", "rrSaved", "rrHeld"];
+const OPTIONAL_KEYS: (keyof Avg)[] = ["transit", "rrEmerg", "rrDefer", "rrBudget", "planFc", "planLocal", "dsStuck", "dsFailed", "rrFailed", "carPax", "transitPax", "bikePax", "walking", "waitRoute", "carShare"];
+const EMPTY: Avg = {
+    hours: 0, speed: 0, queued: 0, jams: 0, local: 0, flow: 0, veh: 0, navShare: 0, navKmh: 0, otherKmh: 0, rr: 0, rrTrucks: 0, rrBetter: 0, rrNoBetter: 0, rrSaved: 0, rrHeld: 0,
+    transit: -1, rrEmerg: -1, rrDefer: -1, rrBudget: -1, planFc: -1, planLocal: -1,
+    dsStuck: -1, dsFailed: -1, rrFailed: -1, carPax: -1, transitPax: -1,
+    bikePax: -1, walking: -1, waitRoute: -1, carShare: -1,
+};
 
 function average(list: Row[]): Avg {
     const r: Avg = { ...EMPTY };
@@ -55,7 +180,28 @@ function average(list: Row[]): Avg {
     }
     const n = Math.max(1, list.length);
     for (const k of AVG_KEYS) (r[k] as number) /= n;
+    for (const k of OPTIONAL_KEYS) {
+        const v = list.map(c => (c as any)[k]).filter((x): x is number => typeof x === "number" && x >= 0);
+        (r[k] as number) = v.length > 0 ? v.reduce((a, b) => a + b, 0) / v.length : -1;
+    }
     return r;
+}
+
+const opt = (v: number) => (v >= 0 ? v : null);
+
+/** "name|x|z" at the bigger of the two queues when a position was recorded, else just the name. */
+function focusKey(place: string, a?: Hotspot, b?: Hotspot): string {
+    const withPos = [a, b].filter((h): h is Hotspot => !!h && h.x !== undefined && h.z !== undefined).sort((p, q) => q.q - p.q);
+    return withPos.length > 0 ? `${place}|${withPos[0].x}|${withPos[0].z}` : place;
+}
+
+/** Progress towards destinations of all cars, trucks and taxis: the two navigation groups weighted by their share. */
+function tripSpeed(r: Row): number | null {
+    const share = Math.min(100, Math.max(0, r.navShare ?? 0)) / 100;
+    if (r.navKmh > 0 && r.otherKmh > 0) return r.navKmh * share + r.otherKmh * (1 - share);
+    if (r.navKmh > 0 && share > 0.99) return r.navKmh;
+    if (r.otherKmh > 0 && share < 0.01) return r.otherKmh;
+    return null;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -67,20 +213,62 @@ interface Metric {
     unit: string;
     digits: number;
     higherIsBetter: boolean;
+    // A side effect to watch, not a goal: differences are not coloured good or bad.
+    neutral?: boolean;
+    note?: string;
     value: (r: Row) => number | null;
 }
 
 const TRAFFIC_METRICS: Metric[] = [
     { key: "speed", label: "Real speed", unit: "%", digits: 1, higherIsBetter: true, value: r => r.speed },
+    {
+        key: "tripSpeed", label: "Trip speed", unit: " km/h", digits: 1, higherIsBetter: true, value: tripSpeed,
+        note: "How fast cars, trucks and taxis get closer to their destination (straight-line distance per hour of driving). The most direct measure of trips getting faster.",
+    },
     { key: "queued", label: "Queued", unit: "%", digits: 1, higherIsBetter: false, value: r => r.queued },
     { key: "jams", label: "Jam warnings", unit: "", digits: 1, higherIsBetter: false, value: r => r.jams },
     { key: "flow", label: "Traffic flow", unit: "%", digits: 0, higherIsBetter: true, value: r => r.flow },
-    { key: "local", label: "Local streets", unit: "%", digits: 1, higherIsBetter: false, value: r => r.local },
+    {
+        key: "local", label: "Local streets", unit: "%", digits: 1, higherIsBetter: false, neutral: true,
+        note: "Share of cars on local streets (50 km/h or less). A side effect to watch, not a goal: some traffic through neighbourhoods is fine when queues drop more. Spreading over other main roads does not count here.",
+        value: r => r.local,
+    },
+    {
+        key: "veh", label: "Vehicles on roads", unit: "", digits: 0, higherIsBetter: false, neutral: true, value: r => r.veh,
+        note: "Road vehicles driving at the same moment. It drops when trips get faster, and also when people leave the car (the route planner also picks how people travel): check Car share of travellers and People walking before reading a drop as better traffic.",
+    },
     {
         key: "navGain", label: "Nav advantage", unit: " km/h", digits: 1, higherIsBetter: true,
         // Only meaningful when both groups exist (navigation share between 0% and 100%).
         value: r => (r.otherKmh > 0 && r.navKmh > 0 ? r.navKmh - r.otherKmh : null),
     },
+    {
+        key: "transit", label: "Public transport share", unit: "%", digits: 1, higherIsBetter: true, neutral: true, value: r => opt(r.transit),
+        note: "Share of people riding a car or public transport right now who ride public transport. It also rises when fewer people sit in cars, so look at the counts below: only a rise in people on public transport means people switched to it.",
+    },
+    {
+        key: "carShare", label: "Car share of travellers", unit: "%", digits: 1, higherIsBetter: false, neutral: true, value: r => opt(r.carShare ?? -1),
+        note: "Out of everyone on the move right now (car, public transport, bicycle, on foot), the share riding in cars and taxis. A big drop means the setting makes people leave the car, not only that traffic flows better.",
+    },
+    {
+        key: "carPax", label: "People in cars", unit: "", digits: 0, higherIsBetter: false, neutral: true, value: r => opt(r.carPax),
+        note: "People riding in cars and taxis at the same moment (not cyclists). Somewhat fewer when car trips get faster; much fewer means people chose another way to travel.",
+    },
+    {
+        key: "transitPax", label: "People on public transport", unit: "", digits: 0, higherIsBetter: true, neutral: true, value: r => opt(r.transitPax),
+        note: "People riding public transport at the same moment. A rise here (not only in the share) means people switched to public transport.",
+    },
+    {
+        key: "walking", label: "People walking", unit: "", digits: 0, higherIsBetter: false, neutral: true, value: r => opt(r.walking ?? -1),
+        note: "People walking outside at the same moment (to a stop, a parked car, or the whole way). A rise with fewer people in cars means people walk instead of driving.",
+    },
+    { key: "bikePax", label: "People cycling", unit: "", digits: 0, higherIsBetter: true, neutral: true, value: r => opt(r.bikePax ?? -1) },
+    {
+        key: "waitRoute", label: "Waiting for a route", unit: "", digits: 0, higherIsBetter: false, value: r => opt(r.waitRoute ?? -1),
+        note: "People waiting for the game's route planner before they can set off. A rise means the route planner is busy (re-routes share it).",
+    },
+    { key: "dsStuck", label: "Despawned: stuck", unit: "", digits: 1, higherIsBetter: false, value: r => opt(r.dsStuck ?? -1) },
+    { key: "dsFailed", label: "Despawned: no route", unit: "", digits: 1, higherIsBetter: false, value: r => opt(r.dsFailed ?? -1) },
 ];
 
 const REROUTE_METRICS: Metric[] = [
@@ -92,6 +280,10 @@ const REROUTE_METRICS: Metric[] = [
     { key: "saved", label: "Time saved", unit: "%", digits: 0, higherIsBetter: true, value: r => (r.rrBetter > 0 ? r.rrSaved : null) },
     { key: "trucks", label: "Trucks", unit: "", digits: 0, higherIsBetter: true, value: r => r.rrTrucks },
     { key: "held", label: "Held back", unit: "", digits: 0, higherIsBetter: false, value: r => r.rrHeld },
+    { key: "emerg", label: "Emergency", unit: "", digits: 0, higherIsBetter: true, value: r => opt(r.rrEmerg) },
+    { key: "defer", label: "Waited for junction", unit: "", digits: 0, higherIsBetter: false, value: r => opt(r.rrDefer) },
+    { key: "budget", label: "Budget", unit: "", digits: 0, higherIsBetter: true, value: r => opt(r.rrBudget) },
+    { key: "rrFailed", label: "Failed re-routes", unit: "", digits: 1, higherIsBetter: false, value: r => opt(r.rrFailed ?? -1) },
 ];
 
 // ---------------------------------------------------------------------------------------------
@@ -116,7 +308,8 @@ function fmtDiff(a: number | null, b: number | null, m: Metric): { text: string;
     if (Math.abs(d) < Math.pow(10, -m.digits) / 2) return { text: "0", cls: "" };
     const good = m.higherIsBetter ? d > 0 : d < 0;
     const rel = Math.abs(a) > 1e-6 ? ` (${d > 0 ? "+" : ""}${((100 * d) / Math.abs(a)).toFixed(0)}%)` : "";
-    return { text: `${d > 0 ? "+" : ""}${d.toFixed(m.digits)}${m.unit}${rel}`, cls: good ? styles.good : styles.bad };
+    const cls = m.neutral ? "" : good ? styles.good : styles.bad;
+    return { text: `${d > 0 ? "+" : ""}${d.toFixed(m.digits)}${m.unit}${rel}`, cls };
 }
 
 const pad2 = (h: number) => String(h).padStart(2, "0");
@@ -275,15 +468,24 @@ function significanceOf(series: { xs: number[]; ys: number[]; paired: boolean; c
 }
 
 const VERDICT_TEXT: Record<Verdict, string> = { clear: "clear", likely: "likely", noise: "noise", "n/a": "" };
+const SLOW_TEXT = "Can't tell yet: this number changes slowly from hour to hour, so its game hours are not independent enough to test. A longer run helps.";
+
+/** Real? badge. "?" when there are game hours but too few independent ones to test (slowly changing numbers). */
+const SigBadge = ({ sig }: { sig: Significance }) =>
+    sig.verdict !== "n/a" ? <span className={styles[`sig_${sig.verdict}`]}>{VERDICT_TEXT[sig.verdict]}</span>
+        : sig.n >= 3 ? <span className={styles.sig_noise}>{"?"}</span> : null;
 
 // ---------------------------------------------------------------------------------------------
 // Small components
 // ---------------------------------------------------------------------------------------------
-const InfoRow = ({ label, value, hint }: { label: string; value: string; hint?: string }) => {
+/** tone colours the value: a key signal (good / bad / worth a look) shouldn't read like any other number. */
+type Tone = "good" | "bad" | "warn" | undefined;
+const toneClass = (t: Tone) => (t === "good" ? styles.good : t === "bad" ? styles.bad : t === "warn" ? styles.warnText : "");
+const InfoRow = ({ label, value, hint, tone }: { label: string; value: string; hint?: string; tone?: Tone }) => {
     const row = (
         <div className={styles.row}>
             <div className={styles.rowLabel}><div>{label}</div>{hint ? <div className={styles.hintMark}>?</div> : null}</div>
-            <div className={styles.rowValue}>{value}</div>
+            <div className={`${styles.rowValue} ${toneClass(tone)}`}>{value}</div>
         </div>
     );
     return hint ? <Tooltip tooltip={<div className={styles.tip}>{hint}</div>}>{row}</Tooltip> : row;
@@ -338,7 +540,7 @@ const Chart = ({ slots, metric, hover, setHover, idle }: {
     const all = slots.flatMap(s => s.values.filter((v): v is number => v !== null));
     if (all.length === 0) return <div className={styles.empty}>Nothing recorded for this yet.</div>;
     const maxAbs = Math.max(1e-6, ...all.map(v => Math.abs(v)));
-    const better = metric.higherIsBetter ? "higher is better" : "lower is better";
+    const better = metric.neutral ? "side effect: watch it" : metric.higherIsBetter ? "higher is better" : "lower is better";
     return (
         <>
             <div className={styles.detail}>{hover >= 0 && hover < slots.length ? slots[hover].detail : idle}</div>
@@ -374,11 +576,38 @@ function modeLabel(mode?: string, preset?: string): string {
 // ---------------------------------------------------------------------------------------------
 // Panel
 // ---------------------------------------------------------------------------------------------
-type Tab = "Now" | "Compare" | "History" | "Hotspots" | "Destinations" | "Rerouting" | "Cost" | "Runs";
+type Tab = "Now" | "Compare" | "History" | "Hotspots" | "Bottlenecks" | "Destinations" | "Rerouting" | "Cost" | "Roadworks" | "Runs";
 const TAB_LABEL: Record<Tab, string> = {
-    Now: "Now", Compare: "Compare", History: "History", Hotspots: "Hotspots", Destinations: "Trips",
-    Rerouting: "Re-route", Cost: "Cost", Runs: "Runs",
+    Now: "Now", Compare: "Compare", History: "History", Hotspots: "Hotspots", Bottlenecks: "Causes", Destinations: "Trips",
+    Rerouting: "Re-route", Cost: "Cost", Roadworks: "Roadworks", Runs: "Runs",
 };
+
+// Temporary roadworks: marks (RoadMarkSystem.cs). Never saved; every text says so.
+const TEMPORARY = "Temporary: marks are not saved and are cleared when you load a save or quit.";
+const MARKS: { mark: number; label: string; tip: string }[] = [
+    { mark: 1, label: "Close road", tip: "Drivers plan around the road as if it were closed (the strongest the route planner allows). It is not a barrier: vehicles already on it drive on, and drivers with live navigation leave it at the next junction." },
+    { mark: 2, label: "Avoid", tip: "The road looks at least 3 times as slow to drivers, so they use it only when there is no reasonable other way." },
+    { mark: 3, label: "Prefer", tip: "Drivers ignore half of the road's congestion penalty, so they keep using it longer when it gets busy. It can't make a road look faster than an empty one." },
+];
+const markLabel = (m: number) => MARKS.find(x => x.mark === m)?.label ?? "-";
+
+/** Comparison as a markdown table, for sharing (Reddit, GitHub issues). */
+function summaryText(nameA: string, nameB: string, runA: Run | undefined, runB: Run | undefined, note: string,
+                     rows: { label: string; a: string; b: string; diff: string; sig: string }[], hoursA: number, hoursB: number): string {
+    const lines = [
+        "**Live Traffic Routing: comparison**",
+        "",
+        `| | A: ${nameA} | B: ${nameB} | B vs A | Real? |`,
+        "|---|---|---|---|---|",
+        `| Game hours | ${hoursA.toFixed(0)} | ${hoursB.toFixed(0)} | | |`,
+        ...rows.map(r => `| ${r.label} | ${r.a} | ${r.b} | ${r.diff} | ${r.sig} |`),
+        "",
+        note,
+        `A: ${runA?.settings ?? "-"}`,
+        `B: ${runB?.settings ?? "-"}`,
+    ];
+    return lines.join("\n");
+}
 
 
 
@@ -468,6 +697,17 @@ export const LiveTrafficPanel = () => {
     const [tlSize, setTlSize] = useState(48);
     const [tlEnd, setTlEnd] = useState(-1);
     const [pending, setPending] = useState("");
+    const [copied, setCopied] = useState(false);
+    // Causes tab: problems that keep coming back (default) or just the last game hour.
+    const [causesView, setCausesView] = useState<"ongoing" | "hour">("ongoing");
+    const roadworksJson = useValue(roadworks$);
+    const bottlenecksJson = useValue(bottlenecks$);
+    const bottlenecks = useMemo(() => parse<Bottlenecks>(bottlenecksJson, { time: "", rows: [], links: [] }), [bottlenecksJson]);
+    const overlayShown = useValue(overlayShown$);
+    const roadworks = useMemo(() => parse<Roadworks>(roadworksJson, { cleared: 0, roads: [] }), [roadworksJson]);
+    const toolOn = useValue(roadworksToolOn$);
+    const toolMode = useValue(roadworksMode$);
+    const modActive = useValue(modActive$);
 
     const current = parse<Current>(useValue(current$), {});
     const historyJson = useValue(history$);
@@ -486,7 +726,7 @@ export const LiveTrafficPanel = () => {
 
     if (!enabled) return null;
 
-    const switchTab = (t: Tab) => { setTab(t); setHover(-1); setPending(""); setTlEnd(-1); };
+    const switchTab = (t: Tab) => { setTab(t); setHover(-1); setPending(""); setTlEnd(-1); setCopied(false); };
     const nameA = runName(runA, runs);
     const nameB = runName(runB, runs);
 
@@ -617,7 +857,7 @@ export const LiveTrafficPanel = () => {
                 <Panel header="Live Traffic" className={styles.panel} onClose={() => setExpanded(false)}>
                     <div className={styles.body}>
                         <div className={styles.tabs}>
-                            {(["Now", "Compare", "History", "Hotspots", "Destinations", "Rerouting", "Cost", "Runs"] as Tab[]).map(t => (
+                            {(["Now", "Compare", "History", "Hotspots", "Bottlenecks", "Destinations", "Rerouting", "Cost", "Roadworks", "Runs"] as Tab[]).map(t => (
                                 <div key={t} className={tab === t ? `${styles.tab} ${styles.tabOn}` : styles.tab} onClick={() => switchTab(t)}>
                                     {TAB_LABEL[t]}
                                 </div>
@@ -629,6 +869,15 @@ export const LiveTrafficPanel = () => {
                                 Right now <span className={current.mode === "Live" ? styles.badgeLive : styles.badgeNative}>{modeLabel(current.mode, current.preset)}</span>
                             </div>
                             {current.settings && <div className={styles.note}>{current.settings}</div>}
+                            {current.auto ? <div className={styles.note}>{current.auto}</div> : null}
+                            {current.news ? <div className={styles.news}>{current.news}</div> : null}
+                            {roadworks.cleared ? (
+                                <div className={styles.temporary} onClick={() => trigger(GROUP, "roadworksDismissNotice")}>
+                                    {"Temporary roadworks were cleared (not saved). Click to hide."}
+                                </div>
+                            ) : roadworks.roads.length > 0 ? (
+                                <div className={styles.temporary}>{`${roadworks.roads.length} temporary road marks active (not saved). See Roadworks.`}</div>
+                            ) : null}
                             <InfoRow label="Vehicles on the road" value={fmt(current.veh)} />
                             <InfoRow label="Real speed vs limit" value={fmt(current.speed, 0, "%")} hint="Average real driving speed of all road vehicles compared with the speed limit, including vehicles waiting at lights and in queues." />
                             <InfoRow label="Waiting in queues" value={fmt(current.queued, 1, "%")} hint="Vehicles stopped behind another stopped vehicle." />
@@ -638,6 +887,8 @@ export const LiveTrafficPanel = () => {
                                      value={current.navShare !== undefined && current.navShare >= 100 ? "no comparison: everyone has navigation"
                                          : current.navShare !== undefined && current.navShare <= 0 ? "no comparison: nobody has navigation"
                                          : `${fmt(current.navKmh, 1)} vs ${fmt(current.otherKmh, 1)} km/h`}
+                                     tone={current.navShare !== undefined && current.navShare > 0 && current.navShare < 100 && current.navKmh !== undefined && current.otherKmh !== undefined
+                                         ? (current.navKmh - current.otherKmh >= 0.5 ? "good" : current.otherKmh - current.navKmh >= 0.5 ? "bad" : undefined) : undefined}
                                      hint="How fast vehicles get closer to their destination (straight line), this game hour. The share is 'Drivers who re-route while driving'. With the mod off both groups should be about equal." />
                             <InfoRow label="Mod processing time"
                                      value={current.mode === "Native" ? "mod is off (only statistics run)"
@@ -685,7 +936,8 @@ export const LiveTrafficPanel = () => {
                                         const sigTip = (
                                             <div className={styles.tip}>
                                                 <div className={styles.tipTitle}>{`${label}: ${d.text}`}</div>
-                                                {sig.verdict === "n/a" ? <div>{"Not enough game hours to tell yet."}</div> : (<>
+                                                {m.note ? <div>{m.note}</div> : null}
+                                                {sig.verdict === "n/a" ? <div>{sig.n >= 3 ? SLOW_TEXT : "Not enough game hours to tell yet."}</div> : (<>
                                                     <TipLine label="Verdict" value={sig.verdict === "clear" ? "clear: very unlikely to be chance" : sig.verdict === "likely" ? "likely real" : "noise: could be chance"} />
                                                     <TipLine label="95% range of the difference"
                                                              value={d.text !== "-" ? `${fmt((vb ?? 0) - (va ?? 0) - sig.range, m.digits)} to ${fmt((vb ?? 0) - (va ?? 0) + sig.range, m.digits)}${m.unit}` : "-"} />
@@ -704,7 +956,7 @@ export const LiveTrafficPanel = () => {
                                                 <div className={`${styles.tableCellWide} ${sig.verdict === "noise" ? "" : d.cls}`}>{d.text}</div>
                                                 <Tooltip tooltip={sigTip}>
                                                     <div className={styles.tableCellSig}>
-                                                        {sig.verdict !== "n/a" && <span className={styles[`sig_${sig.verdict}`]}>{VERDICT_TEXT[sig.verdict]}</span>}
+                                                        <SigBadge sig={sig} />
                                                     </div>
                                                 </Tooltip>
                                             </div>
@@ -712,6 +964,20 @@ export const LiveTrafficPanel = () => {
                                     })}
                                 </div>
                                 <div className={styles.note}>Real?: is the difference bigger than the simulation's own randomness? Hover it for the details. Differences marked noise are not coloured.</div>
+                                <div className={styles.toggles}>
+                                    <Tooltip tooltip={<div className={styles.tip}>{"Copies this comparison as a table (markdown) to the clipboard, to paste into a post or a bug report."}</div>}>
+                                        <div className={`${styles.toggle} ${copied ? styles.toggleOn : ""}`} onClick={() => {
+                                            const rows = compareRows.map(([label, m]) => {
+                                                const va = cmp.a.hours > 0 ? m.value(cmp.a) : null;
+                                                const vb = cmp.b.hours > 0 ? m.value(cmp.b) : null;
+                                                const sig = significance(capsA, capsB, scope, m);
+                                                return { label, a: fmt(va, m.digits, m.unit), b: fmt(vb, m.digits, m.unit), diff: fmtDiff(va, vb, m).text, sig: VERDICT_TEXT[sig.verdict] };
+                                            });
+                                            trigger(GROUP, "copySummary", summaryText(nameA, nameB, runA, runB, cmp.note, rows, cmp.a.hours, cmp.b.hours));
+                                            setCopied(true);
+                                        }}>{copied ? "Copied" : "Copy summary"}</div>
+                                    </Tooltip>
+                                </div>
                                 <div className={styles.note}>{`A: ${runA?.settings ?? "-"}`}</div>
                                 <div className={styles.note}>{`B: ${runB?.settings ?? "-"}`}</div>
                             </>)}
@@ -768,7 +1034,7 @@ export const LiveTrafficPanel = () => {
                                                 const jam = (x?: Hotspot) => (x && x.j >= 0.05 ? ` (${fmt(x.j, 1)})` : "");
                                                 return (
                                                     <Tooltip key={place} tooltip={<div className={styles.tip}>{"Click to show it on the map"}</div>}>
-                                                        <div className={`${styles.tableRow} ${styles.clickRow}`} onClick={() => trigger(GROUP, "focusPlace", place)}>
+                                                        <div className={`${styles.tableRow} ${styles.clickRow}`} onClick={() => trigger(GROUP, "focusPlace", focusKey(place, e.a, e.b))}>
                                                             <div className={styles.tableLabel}>{e.k === "junction" ? `${place} (junction)` : place}</div>
                                                             <div className={styles.tableCell}>{va === null ? "-" : `${fmt(va, 1)}${jam(e.a)}`}</div>
                                                             <div className={styles.tableCell}>{vb === null ? "-" : `${fmt(vb, 1)}${jam(e.b)}`}</div>
@@ -783,6 +1049,121 @@ export const LiveTrafficPanel = () => {
                                 })()}
                             </>)}
                         </>)}
+
+                        {tab === "Bottlenecks" && (() => {
+                            const ongoing = causesView === "ongoing";
+                            const placeRows = (ongoing ? bottlenecks.ongoing : bottlenecks.rows) ?? [];
+                            const fixRows = (ongoing ? bottlenecks.ongoingLinks : bottlenecks.links) ?? [];
+                            const win = bottlenecks.window ?? 0;
+                            return (<>
+                                <div className={styles.toggles}>
+                                    <Toggle label={`Ongoing (last ${win} game hours)`} selected={ongoing} onClick={() => setCausesView("ongoing")} />
+                                    <Toggle label="This hour" selected={!ongoing} onClick={() => setCausesView("hour")} />
+                                </div>
+                                {placeRows.length === 0 ? (
+                                    <div className={styles.empty}>{ongoing
+                                        ? "No real bottleneck: no place averages 5 or more stuck cars per hour, coming back in at least a quarter of the hours."
+                                        : "No bottlenecks yet: the first summary comes after one full game hour with queues."}</div>
+                                ) : (<>
+                                    <div className={styles.note}>{ongoing
+                                        ? `Where queues start most, added up over the last ${win} game hours. Fix the start of a queue, not where the cars stand.`
+                                        : `Where queues start, game hour ${bottlenecks.time}. Fix the start of a queue, not where the cars stand.`}</div>
+                                    {!ongoing && bottlenecks.quiet ? <div className={styles.note}>{"No real bottleneck this hour: queues clear within about a light cycle."}</div> : null}
+                                    <div className={styles.table}>
+                                        {placeRows.map(r => (
+                                            <Tooltip key={r.id} tooltip={<div className={styles.tip}>
+                                                <div className={styles.tipTitle}>{r.place}</div>
+                                                <div>{`Causes: ${r.mix || r.cause}`}</div>
+                                                {ongoing ? <div>{`On the list in ${r.hoursIn ?? 0} of the last ${win} game hours; ${fmt(r.avgWait ?? 0, 1)} stuck cars per hour on average, ${fmt(r.recent ?? 0, 1)} in the last 3 hours.${r.status === "cleared" ? " No queue for " + (r.since ?? 0) + " game hours: if you fixed it, it worked. It leaves the list once its old hours are out of the window." : ""}${(r.despawns ?? 0) > 0 ? ` The game removed ${fmt(r.despawns ?? 0, 1)} stuck cars per hour here.` : ""}`}</div> : null}
+                                                <div>{`Last time: ${fmt(r.queued, 1)} cars queued behind it, ${fmt(r.wait ?? 0, 1)} of them waited over half a minute.`}</div>
+                                                <div className={styles.tipNote}>{"Click to show it on the map with its lanes, turns and where the drivers come from and go to. Click again to hide."}</div>
+                                            </div>}>
+                                                <div className={`${styles.tableRow} ${styles.clickRow} ${overlayShown === r.id ? styles.rowOn : ""} ${ongoing && r.status === "cleared" ? styles.rowCleared : ""}`} onClick={() => trigger(GROUP, "showOverlay", r.id)}>
+                                                    <div className={styles.tableLabel}>
+                                                        <div>{r.kind === "junction" ? `${r.place} (junction)` : r.place}</div>
+                                                        {(() => {
+                                                            // One string per text element (Coherent stacks mixed pieces), the status as its own badge.
+                                                            const ideas = fixRows.filter(l => l.forId === r.id).length;
+                                                            const ideaText = "";
+                                                            const removed = r.despawns ?? 0;
+                                                            const status = ongoing ? r.status ?? "" : "";
+                                                            const text = !ongoing ? `${r.cause}${ideaText}`
+                                                                : status === "cleared" ? `no queue for ${r.since ?? 0} game hours · was in ${r.hoursIn ?? 0} of ${win} hours`
+                                                                : `${(r.queuesOn ?? []).length > 0 ? "queues on " + (r.queuesOn ?? []).map(q => q.n).join(", ") : r.cause} · in ${r.hoursIn ?? 0} of ${win} hours${ideaText}`;
+                                                            const badge = status === "better" ? { cls: styles.statusBetter, label: "getting better" }
+                                                                : status === "worse" ? { cls: styles.statusWorse, label: "getting worse" }
+                                                                : status === "cleared" ? { cls: styles.statusCleared, label: "cleared (fixed?)" } : null;
+                                                            return (<div className={styles.subRow}>
+                                                                {badge ? <div className={`${styles.status} ${badge.cls}`}>{badge.label}</div> : null}
+                                                                {removed >= 0.5 ? <div className={`${styles.status} ${styles.statusRemoved}`}>{`${fmt(removed, 0)} removed${ongoing ? "/h" : ""}`}</div> : null}
+                                                                {ideas > 0 ? <div className={`${styles.status} ${styles.statusIdea}`}>{`${ideas} fix idea${ideas > 1 ? "s" : ""}`}</div> : null}
+                                                                <div className={styles.subLine}>{text}</div>
+                                                            </div>);
+                                                        })()}
+                                                    </div>
+                                                    <div className={styles.tableCell}>{ongoing ? (r.status === "cleared" ? "cleared" : `${fmt(r.avgWait ?? 0, 0)} stuck/h`) : `${fmt(r.wait ?? r.queued, 0)} stuck`}</div>
+                                                </div>
+                                            </Tooltip>
+                                        ))}
+                                    </div>
+                                </>)}
+                                {ongoing && (bottlenecks.minHours ?? -1) < 0 && placeRows.length > 0
+                                    ? <div className={styles.note}>{"Fix ideas (new roads, missing turns) show up in a place's details after 4 game hours, once it is clear which detours keep coming back."}</div>
+                                    : null}
+                                {(() => {
+                                    const r = placeRows.find(x => x.id === overlayShown);
+                                    const l = fixRows.find(x => (x.key ?? `${x.aId}-${x.bId}`) === overlayShown);
+                                    if (r) {
+                                        const advice = (r.advice ?? "").split("||").filter(a => a.length > 0);
+                                        const seen = advice.map(a => { const at = a.indexOf(" Try: "); return at > 0 ? a.substring(0, at) : a; });
+                                        const tries = advice.map(a => { const at = a.indexOf(" Try: "); return at > 0 ? a.substring(at + 6) : ""; }).filter(t => t.length > 0);
+                                        const endsElsewhere = !!r.endsAt && r.endsAt !== r.place && r.endsAtId !== r.id;
+                                        const fixes = fixRows.filter(f => f.forId === r.id);
+                                        return (<div className={styles.detailBox}>
+                                            <div className={styles.detailTitle}>{r.place}</div>
+                                            <div className={styles.sectionLabel}>{"What we see"}</div>
+                                            {(r.queuesOn ?? []).length > 0 ? <Chips label="Queues on:" items={r.queuesOn ?? []} /> : null}
+                                            {endsElsewhere ? <Chips label="They start at the junction:" items={[{ n: r.endsAt ?? "", id: r.endsAtId ?? "" }]} /> : null}
+                                            {r.moves ? <div className={styles.note}>{r.moves}</div> : null}
+                                            {r.lanes ? <div className={styles.note}>{r.lanes}</div> : null}
+                                            {r.flow ? <div className={styles.note}>{r.flow}</div> : null}
+                                            <Chips label="Going to:" items={r.toList ?? []} />
+                                            <Chips label="Coming from:" items={r.fromList ?? []} />
+                                            <div className={styles.note}>{`Passing through (start and end over 1 km away): ${r.through < 0 ? "unknown" : fmt(r.through, 0) + "%"}.${(r.trucks ?? 0) >= 10 ? ` Trucks: ${fmt(r.trucks ?? 0, 0)}% of the queued vehicles.` : ""}`}</div>
+                                            {(r.despawns ?? 0) > 0 ? <div className={styles.advice}>{`The game removed ${fmt(r.despawns ?? 0, 1)} stuck cars ${ongoing ? "per hour" : "last hour"} in these queues (cars stuck too long simply vanish).`}</div> : null}
+                                            {seen.map(t => <div key={t} className={styles.advice}>{t}</div>)}
+                                            {tries.length > 0 || fixes.length > 0 ? (<>
+                                                <div className={styles.sectionLabel}>{"What you can do"}</div>
+                                                {tries.map(t => <div key={t} className={styles.tryLine}>{`• ${t.charAt(0).toUpperCase()}${t.substring(1)}`}</div>)}
+                                                {fixes.map(f => (
+                                                    <div key={f.key ?? `${f.aId}-${f.bId}`} className={`${styles.tryLine} ${styles.clickRow}`} onClick={() => trigger(GROUP, "showOverlay", f.key ?? `${f.aId}-${f.bId}`)}>
+                                                        {`• ${linkText(f)} It would take these drivers out of this queue${ongoing ? ` (seen in ${f.hoursIn ?? 0} of ${win} hours)` : ""}. Click to see it on the map.`}
+                                                    </div>
+                                                ))}
+                                            </>) : null}
+                                            <Legend items={PLACE_LEGEND} />
+                                        </div>);
+                                    }
+                                    if (l) {
+                                        const fix = linkLegend(l);
+                                        const at = fix.indexOf("Try: ");
+                                        return (<div className={styles.detailBox}>
+                                            {l.forName ? <div className={`${styles.note} ${styles.clickRow}`} onClick={() => trigger(GROUP, "showOverlay", l.forId ?? "")}>{`< Back to ${l.forName}`}</div> : null}
+                                            <div className={styles.sectionLabel}>{"What we see"}</div>
+                                            <div className={styles.advice}>{linkStory(l)}</div>
+                                            {l.forName ? <div className={styles.note}>{`These drivers are stuck in the queue at ${l.forName}; this would let them skip it.`}</div> : null}
+                                            {(l.streets ?? []).length > 0 ? <Chips label="Streets:" items={l.streets ?? []} /> : null}
+                                            {at >= 0 ? (<>
+                                                <div className={styles.sectionLabel}>{"What you can do"}</div>
+                                                <div className={styles.tryLine}>{`• ${fix.substring(at + 5).charAt(0).toUpperCase()}${fix.substring(at + 6)}`}</div>
+                                            </>) : null}
+                                            <Legend items={linkLegendItems(l)} />
+                                        </div>);
+                                    }
+                                    return <div className={styles.note}>{"Click a place to show it on the map, with what you can do about it."}</div>;
+                                })()}
+                            </>);
+                        })()}
 
                         {tab === "Destinations" && (<>
                             {runs.length < 2 ? <div className={styles.empty}>{"Record at least two runs (for example Native and Live from the same save) to compare destinations."}</div> : (<>
@@ -819,7 +1200,7 @@ export const LiveTrafficPanel = () => {
                                                             <div className={styles.tableCell}>{fmt(vb, dm.digits, dm.unit)}</div>
                                                             <div className={`${styles.tableCellWide} ${sig.verdict === "noise" ? "" : d.cls}`}>{d.text}</div>
                                                             <div className={styles.tableCellSig}>
-                                                                {sig.verdict !== "n/a" && <span className={styles[`sig_${sig.verdict}`]}>{VERDICT_TEXT[sig.verdict]}</span>}
+                                                                <SigBadge sig={sig} />
                                                             </div>
                                                         </div>
                                                     );
@@ -899,7 +1280,7 @@ export const LiveTrafficPanel = () => {
                                                         <div className={styles.tableCell}>{fmt(onlyB, dm.digits, dm.unit)}</div>
                                                         <div className={`${styles.tableCellWide} ${sig.verdict === "noise" ? "" : d.cls}`}>{d.text}</div>
                                                         <div className={styles.tableCellSig}>
-                                                            {sig.verdict !== "n/a" && <span className={styles[`sig_${sig.verdict}`]}>{VERDICT_TEXT[sig.verdict]}</span>}
+                                                            <SigBadge sig={sig} />
                                                         </div>
                                                     </div>
                                                 );
@@ -917,8 +1298,12 @@ export const LiveTrafficPanel = () => {
                                 <div className={styles.sectionTitle}>{`Run ${rrTotalsName}: average per game hour`}</div>
                                 <InfoRow label="Re-routes" value={`${fmt(rrTotals.rr)} (${fmt(rrTotals.rrTrucks)} by trucks)`} />
                                 <InfoRow label="Found a faster route"
+                                         tone={rrTotals.rrBetter + rrTotals.rrNoBetter > 0 ? ((100 * rrTotals.rrBetter) / (rrTotals.rrBetter + rrTotals.rrNoBetter) >= 50 ? "good" : (100 * rrTotals.rrBetter) / (rrTotals.rrBetter + rrTotals.rrNoBetter) < 30 ? "warn" : undefined) : undefined}
                                          value={rrTotals.rrBetter + rrTotals.rrNoBetter > 0 ? `${fmt((100 * rrTotals.rrBetter) / (rrTotals.rrBetter + rrTotals.rrNoBetter), 0, "%")} (avg ${fmt(rrTotals.rrSaved, 0, "%")} of the rest of the trip saved, estimate)` : "-"} />
-                                <InfoRow label="Held back by the limit" value={fmt(rrTotals.rrHeld)} hint="Re-routes postponed because the per-update limit (64) was reached. Often high means the limit is holding the mod back." />
+                                <InfoRow label="Held back by the limit" tone={rrTotals.rrHeld >= 1 ? "warn" : undefined} value={`${fmt(rrTotals.rrHeld)}${rrTotals.rrBudget >= 0 ? ` (limit ${fmt(rrTotals.rrBudget)} per update)` : ""}`}
+                                         hint="Re-routes postponed because the per-update limit was reached. The limit follows how busy the game's route planner is: from 8 when it is busy up to 128 when it has room." />
+                                {rrTotals.rrEmerg >= 0 && <InfoRow label="Emergency vehicles" value={fmt(rrTotals.rrEmerg)} hint="Re-routes by ambulances, fire engines and police cars on an emergency run. They always have live navigation." />}
+                                {rrTotals.rrDefer >= 0 && <InfoRow label="Waited for a junction" value={fmt(rrTotals.rrDefer)} hint="Times a driver's way ahead got slower but no junction with a choice was coming up, so they waited for one before looking for another way." />}
                                 <div className={styles.toggles}>
                                     <Toggle label="By time of day" selected={rrView === "TimeOfDay"} onClick={() => { setRrView("TimeOfDay"); setHover(-1); }} />
                                     <Toggle label="Timeline" selected={rrView === "Timeline"} onClick={() => { setRrView("Timeline"); setHover(-1); }} />
@@ -936,6 +1321,45 @@ export const LiveTrafficPanel = () => {
                                     {lastLive ? "Pick a Live run as A or B to see its re-routing." : "No live game hour recorded yet."}
                                 </div>
                             )}
+                        </>)}
+
+                        {tab === "Roadworks" && (<>
+                            <div className={styles.temporary}>{TEMPORARY}</div>
+                            {roadworks.cleared ? (
+                                <div className={styles.note} onClick={() => trigger(GROUP, "roadworksDismissNotice")}>{"Temporary roadworks were cleared (not saved) when the city loaded. Click to hide."}</div>
+                            ) : null}
+                            {!modActive && <div className={styles.note}>{"The mod is set to Off: road marks do nothing until you turn it on."}</div>}
+                            <div className={styles.note}>{"Mark roads to test your network without deleting anything: close a road for traffic, or ask drivers to avoid or prefer it. Marks change how drivers plan their routes; they are not barriers."}</div>
+                            <div className={styles.toggles}>
+                                {MARKS.map(m => (
+                                    <Tooltip key={m.mark} tooltip={<div className={styles.tip}><div className={styles.tipTitle}>{m.label}</div><div>{m.tip}</div><div className={styles.tipNote}>{TEMPORARY}</div></div>}>
+                                        <div className={`${styles.toggle} ${toolOn && toolMode === m.mark ? styles.toggleOn : ""}`}
+                                             onClick={() => trigger(GROUP, "roadworksTool", toolOn && toolMode === m.mark ? 0 : m.mark)}>
+                                            {m.label}
+                                        </div>
+                                    </Tooltip>
+                                ))}
+                                {toolOn && <div className={styles.toggle} onClick={() => trigger(GROUP, "roadworksTool", 0)}>{"Done"}</div>}
+                            </div>
+                            {toolOn && <div className={styles.note}>{`Click a road to mark it "${markLabel(toolMode)}". Click it again, or right-click it, to remove the mark.`}</div>}
+                            {roadworks.roads.length === 0 ? <div className={styles.empty}>{"No roads marked."}</div> : (<>
+                                <div className={styles.table}>
+                                    {roadworks.roads.slice(0, 12).map(r => (
+                                        <div className={styles.tableRow} key={r.id}>
+                                            <Tooltip tooltip={<div className={styles.tip}>{"Click to show it on the map"}</div>}>
+                                                <div className={`${styles.tableLabel} ${styles.clickRow}`} onClick={() => trigger(GROUP, "roadworksFocus", r.id)}>{r.name}</div>
+                                            </Tooltip>
+                                            <div className={`${styles.tableCell} ${r.mark === 1 ? styles.bad : r.mark === 3 ? styles.good : ""}`}>{markLabel(r.mark)}</div>
+                                            <div className={styles.toggle} onClick={() => trigger(GROUP, "roadworksRemove", r.id)}>{"Remove"}</div>
+                                        </div>
+                                    ))}
+                                </div>
+                                {roadworks.roads.length > 12 && <div className={styles.note}>{`and ${roadworks.roads.length - 12} more`}</div>}
+                                <div className={styles.resetRow}>
+                                    <DangerButton id="marks" label="Remove all marks" confirmLabel="Click again to remove all marks"
+                                                  pending={pending} setPending={setPending} onConfirm={() => trigger(GROUP, "roadworksClear")} />
+                                </div>
+                            </>)}
                         </>)}
 
                         {tab === "Runs" && (<>
