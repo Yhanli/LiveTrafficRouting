@@ -11,8 +11,15 @@
         flow: "Last game hour, per lane: 310 cars could turn left, 540 cars could go straight, 120 cars could turn right.",
         advice: "Turning is slow here: about 310 cars per lane turn left each game hour, against 540 going straight. Try: let a second lane turn left, make the turn wider, or give it a free-flowing slip lane.||Most queued cars on Ashbourne Street (88%) wait in one lane, even though other lanes can make the same turn. Try: a longer road before the junction so drivers change lanes earlier, or let other lanes make the turn (Traffic mod).",
         to: "Sycamore Street 39%, Spring Street 20%, Strawberry Street 6%", from: "Cargo Transfer Station 86%, Ashbourne Street 14%",
-        toList: [{ n: "Sycamore Street", id: "301:1", p: 39 }, { n: "Spring Street", id: "302:1", p: 20 }, { n: "Strawberry Street", id: "303:1", p: 6 }],
-        fromList: [{ n: "Cargo Transfer Station", id: "401:1", p: 86 }, { n: "Ashbourne Street", id: "100:1", p: 14 }],
+        toList: [
+            { n: "around Sycamore Street (9 streets)", id: "301:1", p: 58, x: 1200, z: -300, r: 420, streets: [{ n: "Sycamore Street", p: 31 }, { n: "Spring Street", p: 17 }, { n: "Moonflower Street", p: 6 }, { n: "Lilac Street", p: 3 }] },
+            { n: "around Strawberry Street (4 streets)", id: "303:1", p: 14, x: 900, z: 650, r: 300, streets: [{ n: "Strawberry Street", p: 8 }, { n: "Walnut Street", p: 4 }] },
+            { n: "outside the city (east)", id: "", p: 9, x: 7168, z: 200, r: 0, streets: [{ n: "outside the city", p: 9 }] },
+        ],
+        fromList: [
+            { n: "Cargo Transfer Station", id: "401:1", p: 86, x: -400, z: 900, r: 260, streets: [{ n: "Cargo Transfer Station", p: 81 }, { n: "Ashbourne Street", p: 5 }] },
+            { n: "around Ashbourne Street (3 streets)", id: "100:1", p: 10, x: -900, z: 400, r: 350, streets: [{ n: "Ashbourne Street", p: 7 }, { n: "Barlow Street", p: 3 }] },
+        ],
     };
     const northgate = {
         id: "1201248:3", place: "Northgate Street / Walnut Street", kind: "junction", cause: "people crossing at a crosswalk", mix: "people crossing at a crosswalk 64%, traffic lights 30%",

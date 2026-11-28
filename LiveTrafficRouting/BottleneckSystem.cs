@@ -72,6 +72,10 @@ namespace LiveTrafficRouting
         // Playable area: +-7168 m. A trip first seen within this margin of the edge came from outside the city.
         private const float kMapHalfSize = 7168f;
         private const float kBorderMargin = 600f;
+        // Origin / destination grid and area size (about 1 km across).
+        private const float kAreaCell = 250f;
+        private const float kAreaRadius = 500f;
+        private const int kOutsideCell = 1 << 20;
         // Marker area for "outside the city" (no entity has this index).
         private const int kOutsideIndex = int.MaxValue - 7;
         private const int kMaxRoutePoints = 60;
@@ -194,6 +198,28 @@ namespace LiveTrafficRouting
             public override int GetHashCode() => (Place.GetHashCode() * 397 ^ Area.GetHashCode()) * 31 + Kind;
         }
 
+        /// <summary>
+        /// Where a queued driver comes from (Kind 1) or goes to (Kind 0), on a 250 m grid, with the named area (district,
+        /// street or building) found there. Grouped into areas of about 1 km at the end of the hour (BuildAreas).
+        /// Outside the city: one cell per map side.
+        /// </summary>
+        private struct OdCellKey : IEquatable<OdCellKey>
+        {
+            public Entity Place;
+            public int Kind;
+            public int2 Cell;
+            public Entity Area;
+
+            public bool Equals(OdCellKey o) => Place == o.Place && Kind == o.Kind && Cell.Equals(o.Cell) && Area == o.Area;
+            public override int GetHashCode() => ((Place.GetHashCode() * 397 ^ Cell.GetHashCode()) * 31 + Kind) * 397 ^ Area.GetHashCode();
+        }
+
+        private struct OdCellValue
+        {
+            public int Count;
+            public float3 PositionSum;
+        }
+
         private struct LinkKey : IEquatable<LinkKey>
         {
             public Entity A;
@@ -303,6 +329,7 @@ namespace LiveTrafficRouting
             public NativeParallelHashMap<Entity, HeadLink> m_HeadOf;
             public NativeParallelHashMap<Entity, PlaceStats> m_Places;
             public NativeParallelHashMap<OdKey, int> m_Od;
+            public NativeParallelHashMap<OdCellKey, OdCellValue> m_OdCells;
             public NativeParallelHashMap<LinkKey, LinkStats> m_Links;
             public NativeParallelHashMap<Entity, Origin> m_Origins;
             public NativeArray<double> m_Stats;
@@ -456,12 +483,14 @@ namespace LiveTrafficRouting
                         if (destKnown && destArea != Entity.Null)
                         {
                             Add(new OdKey { Place = info.Place, Area = destArea, Kind = 0 });
+                            AddCell(info.Place, 0, destPos, destArea);
                             m_Stats[8] += 1;
                         }
                         if (hasOrigin && !origin.Valid) m_Stats[10] += 1;
                         if (hasOrigin && origin.Valid && origin.Area != Entity.Null)
                         {
                             Add(new OdKey { Place = info.Place, Area = origin.Area, Kind = 1 });
+                            AddCell(info.Place, 1, origin.Position, origin.Area);
                             m_Stats[9] += 1;
                             if (origin.Area.Index == kOutsideIndex) m_Stats[17] += 1;
                         }
@@ -558,6 +587,23 @@ namespace LiveTrafficRouting
                 // Real lanes only: a group ("master") lane stands for several of them.
                 for (int i = 0; i < lanes.Length; i++) if (m_CarLaneData.HasComponent(lanes[i].m_SubLane) && !m_MasterLaneData.HasComponent(lanes[i].m_SubLane)) n++;
                 return n;
+            }
+
+            private void AddCell(Entity place, int kind, float3 position, Entity area)
+            {
+                int2 cell;
+                if (area.Index == kOutsideIndex)
+                {
+                    // One cell per map side: east 0, west 1, north 2, south 3.
+                    int side = math.abs(position.x) >= math.abs(position.z) ? (position.x >= 0f ? 0 : 1) : (position.z >= 0f ? 2 : 3);
+                    cell = new int2(kOutsideCell + side, kOutsideCell);
+                }
+                else cell = (int2)math.floor(position.xz / kAreaCell);
+                var key = new OdCellKey { Place = place, Kind = kind, Cell = cell, Area = area };
+                m_OdCells.TryGetValue(key, out OdCellValue v);
+                v.Count++;
+                v.PositionSum += position;
+                m_OdCells[key] = v;
             }
 
             private void Add(OdKey key)
@@ -926,6 +972,7 @@ namespace LiveTrafficRouting
             public int ChainMax;
             public readonly Dictionary<Entity, PlaceHour> Places = new Dictionary<Entity, PlaceHour>();
             public readonly Dictionary<OdKey, int> Od = new Dictionary<OdKey, int>();
+            public readonly Dictionary<OdCellKey, OdCellValue> OdCells = new Dictionary<OdCellKey, OdCellValue>();
             public readonly Dictionary<LinkKey, LinkHour> Links = new Dictionary<LinkKey, LinkHour>();
             public readonly Dictionary<PlaceLaneKey, int> QueueLanes = new Dictionary<PlaceLaneKey, int>();
             public readonly Dictionary<PlaceLaneKey, int> JunctionMoves = new Dictionary<PlaceLaneKey, int>();
@@ -943,6 +990,7 @@ namespace LiveTrafficRouting
         private NativeParallelHashMap<Entity, HeadLink> m_HeadOf;
         private NativeParallelHashMap<Entity, PlaceStats> m_Places;
         private NativeParallelHashMap<OdKey, int> m_Od;
+        private NativeParallelHashMap<OdCellKey, OdCellValue> m_OdCells;
         private NativeParallelHashMap<LinkKey, LinkStats> m_Links;
         private NativeParallelHashMap<Entity, Origin> m_Origins;
         private NativeParallelHashMap<Entity, Wait> m_Waits;
@@ -991,6 +1039,7 @@ namespace LiveTrafficRouting
             m_HeadOf = new NativeParallelHashMap<Entity, HeadLink>(16384, Allocator.Persistent);
             m_Places = new NativeParallelHashMap<Entity, PlaceStats>(1024, Allocator.Persistent);
             m_Od = new NativeParallelHashMap<OdKey, int>(4096, Allocator.Persistent);
+            m_OdCells = new NativeParallelHashMap<OdCellKey, OdCellValue>(8192, Allocator.Persistent);
             m_Links = new NativeParallelHashMap<LinkKey, LinkStats>(512, Allocator.Persistent);
             m_Origins = new NativeParallelHashMap<Entity, Origin>(16384, Allocator.Persistent);
             m_Waits = new NativeParallelHashMap<Entity, Wait>(4096, Allocator.Persistent);
@@ -1010,6 +1059,7 @@ namespace LiveTrafficRouting
             m_HeadOf.Dispose();
             m_Places.Dispose();
             m_Od.Dispose();
+            m_OdCells.Dispose();
             m_Links.Dispose();
             m_Origins.Dispose();
             m_Waits.Dispose();
@@ -1049,6 +1099,7 @@ namespace LiveTrafficRouting
             m_HeadOf.Clear();
             m_Places.Clear();
             m_Od.Clear();
+            m_OdCells.Clear();
             m_Links.Clear();
             m_QueueLanes.Clear();
             m_JunctionMoves.Clear();
@@ -1166,6 +1217,7 @@ namespace LiveTrafficRouting
                 m_HeadOf = m_HeadOf,
                 m_Places = m_Places,
                 m_Od = m_Od,
+                m_OdCells = m_OdCells,
                 m_Links = m_Links,
                 m_Origins = m_Origins,
                 m_Stats = m_Stats,
@@ -1222,6 +1274,16 @@ namespace LiveTrafficRouting
                         p.ExampleHead = s.ExampleHead;
                     }
                     p.Position = s.Position;
+                }
+            }
+            using (NativeKeyValueArrays<OdCellKey, OdCellValue> kv = m_OdCells.GetKeyValueArrays(Allocator.Temp))
+            {
+                for (int i = 0; i < kv.Length; i++)
+                {
+                    h.OdCells.TryGetValue(kv.Keys[i], out OdCellValue v);
+                    v.Count += kv.Values[i].Count;
+                    v.PositionSum += kv.Values[i].PositionSum;
+                    h.OdCells[kv.Keys[i]] = v;
                 }
             }
             using (NativeKeyValueArrays<OdKey, int> kv = m_Od.GetKeyValueArrays(Allocator.Temp))
@@ -1343,6 +1405,8 @@ namespace LiveTrafficRouting
             string time = hourKey.ToString("yyyy-MM-dd HH:00", CultureInfo.InvariantCulture);
 
             var rows = new List<Row>();
+            // Origin / destination cells by place, once (each row needs only its own).
+            Dictionary<Entity, List<KeyValuePair<OdCellKey, OdCellValue>>> hourCells = IndexCells(h.OdCells);
             // Ranked by cars that waited longer than a light cycle: a red light queue is normal, a queue that stays is not.
             foreach (KeyValuePair<Entity, PlaceHour> kv in h.Places.OrderByDescending(p => p.Value.LongWait).ThenByDescending(p => p.Value.Queued))
             {
@@ -1372,8 +1436,8 @@ namespace LiveTrafficRouting
                     SpillPct = p.Queued > 0 ? p.Spill / p.Queued * 100 : 0,
                     ThroughPct = p.OdKnown > 0 ? p.Through / p.OdKnown * 100 : -1,
                     OdKnown = p.OdKnown,
-                    ToList = TopAreaList(h, kv.Key, 0),
-                    FromList = TopAreaList(h, kv.Key, 1),
+                    ToList = BuildAreas(CellsOf(hourCells, kv.Key), 0),
+                    FromList = BuildAreas(CellsOf(hourCells, kv.Key), 1),
                     ChainMax = p.ChainMax,
                     ExampleHead = p.ExampleHead,
                     TopCause = top,
@@ -1497,7 +1561,12 @@ namespace LiveTrafficRouting
             }
 
             // Ranking over time: what keeps coming back in the last kWindowHours game hours, not a one-hour flash.
-            m_Window.Add(new HourSummary { Rows = rows, Links = links, Despawns = despawns });
+            var tracked = new HashSet<Entity>(rows.Select(r => r.Place));
+            m_Window.Add(new HourSummary
+            {
+                Rows = rows, Links = links, Despawns = despawns,
+                Cells = h.OdCells.Where(c => tracked.Contains(c.Key.Place)).ToDictionary(c => c.Key, c => c.Value),
+            });
             while (m_Window.Count > kWindowHours) m_Window.RemoveAt(0);
             int windowHours = m_Window.Count;
             List<Row> ongoingRows = RankRows(windowHours);
@@ -1563,6 +1632,7 @@ namespace LiveTrafficRouting
             public List<Row> Rows;
             public List<LinkRow> Links;
             public Dictionary<Entity, int> Despawns;
+            public Dictionary<OdCellKey, OdCellValue> Cells;
         }
 
         private readonly List<HourSummary> m_Window = new List<HourSummary>();
@@ -1607,6 +1677,16 @@ namespace LiveTrafficRouting
             }
             int minHours = Math.Max(1, (int)Math.Ceiling(windowHours / 4.0));
             var list = new List<Row>();
+            var windowCells = new Dictionary<Entity, List<KeyValuePair<OdCellKey, OdCellValue>>>();
+            foreach (HourSummary hs in m_Window)
+            {
+                if (hs.Cells == null) continue;
+                foreach (KeyValuePair<OdCellKey, OdCellValue> c in hs.Cells)
+                {
+                    if (!windowCells.TryGetValue(c.Key.Place, out var l)) windowCells[c.Key.Place] = l = new List<KeyValuePair<OdCellKey, OdCellValue>>();
+                    l.Add(c);
+                }
+            }
             foreach (KeyValuePair<string, double> kv in sum.OrderByDescending(x => x.Value))
             {
                 if (list.Count >= kRowsPerHour) break;
@@ -1616,6 +1696,12 @@ namespace LiveTrafficRouting
                 Entity main = memberSum[kv.Key].OrderByDescending(x => x.Value).First().Key;
                 if (!EntityManager.Exists(main)) continue;
                 Row r = latest[main].Copy();
+                // Where the group's drivers come from and go to over the whole window (not just the latest hour).
+                var groupCells = memberSum[kv.Key].Keys.SelectMany(place => CellsOf(windowCells, place)).ToList();
+                r.ToList = BuildAreas(groupCells, 0);
+                r.FromList = BuildAreas(groupCells, 1);
+                r.To = AreasText(r.ToList);
+                r.From = AreasText(r.FromList);
                 r.HoursIn = hours[kv.Key].Count;
                 r.AvgWait = avg;
                 // Still there? A fix shows as "cleared" within kClearedHours, long before its old hours leave the window.
@@ -1704,8 +1790,8 @@ namespace LiveTrafficRouting
                     view.Turns = r.Lanes.Turns;
                     view.Junction = r.Lanes.Junction;
                 }
-                if (r.FromList != null) foreach (AreaShare a in r.FromList) if (a.HasPosition) view.Origins.Add(new KeyValuePair<float3, float>(a.Position, (float)a.Share));
-                if (r.ToList != null) foreach (AreaShare a in r.ToList) if (a.HasPosition) view.Destinations.Add(new KeyValuePair<float3, float>(a.Position, (float)a.Share));
+                if (r.FromList != null) foreach (AreaShare a in r.FromList) if (a.HasPosition) view.Origins.Add(new AreaPoint { Position = a.Position, Share = (float)a.Share, Radius = a.Radius, Outside = a.Outside });
+                if (r.ToList != null) foreach (AreaShare a in r.ToList) if (a.HasPosition) view.Destinations.Add(new AreaPoint { Position = a.Position, Share = (float)a.Share, Radius = a.Radius, Outside = a.Outside });
                 Views[Id(r.Place)] = view;
             }
             foreach (LinkRow l in links)
@@ -1933,67 +2019,185 @@ namespace LiveTrafficRouting
             return SharesEdge(EntityManager.GetBuffer<ConnectedEdge>(a, true), b, EntityManager);
         }
 
-        /// <summary>Top 3 areas (destinations or origins) of a place, merged by name, with an entity and position each.</summary>
-        private List<AreaShare> TopAreaList(Hour h, Entity place, int kind)
+        /// <summary>
+        /// Where a bottleneck's drivers come from (kind 1) or go to (kind 0), as areas of about 1 km: the busiest grid cell
+        /// starts an area and takes in the cells within kAreaRadius, then the next busiest cell left, and so on. Each area
+        /// is named after a building or lot that makes up half of it, a district that makes up 60%, or otherwise its top
+        /// street ("around X (N streets)"). Outside the city is one area per map side. Top 4 with 5% or more.
+        /// </summary>
+        private static Dictionary<Entity, List<KeyValuePair<OdCellKey, OdCellValue>>> IndexCells(Dictionary<OdCellKey, OdCellValue> cells)
         {
-            var list = h.Od.Where(o => o.Key.Place == place && o.Key.Kind == kind).ToList();
-            double total = list.Sum(o => o.Value);
-            var byName = new Dictionary<string, AreaShare>();
-            var best = new Dictionary<string, int>();
-            if (total <= 0) return new List<AreaShare>();
-            foreach (KeyValuePair<OdKey, int> o in list)
+            var byPlace = new Dictionary<Entity, List<KeyValuePair<OdCellKey, OdCellValue>>>();
+            foreach (KeyValuePair<OdCellKey, OdCellValue> c in cells)
             {
-                if (o.Key.Area.Index != kOutsideIndex && !EntityManager.Exists(o.Key.Area)) continue;
-                string name = PlaceName(o.Key.Area);
-                if (!byName.TryGetValue(name, out AreaShare a))
-                {
-                    byName[name] = a = new AreaShare { Name = name, Entity = o.Key.Area };
-                    best[name] = 0;
-                }
-                a.Share += o.Value / total;
-                if (o.Value > best[name])
-                {
-                    best[name] = o.Value;
-                    a.Entity = o.Key.Area;
-                }
+                if (!byPlace.TryGetValue(c.Key.Place, out var l)) byPlace[c.Key.Place] = l = new List<KeyValuePair<OdCellKey, OdCellValue>>();
+                l.Add(c);
             }
-            List<AreaShare> top = byName.Values.OrderByDescending(a => a.Share).Take(3).ToList();
-            foreach (AreaShare a in top) a.HasPosition = TryAreaPosition(a.Entity, out a.Position);
-            return top;
+            return byPlace;
+        }
+
+        private static List<KeyValuePair<OdCellKey, OdCellValue>> CellsOf(Dictionary<Entity, List<KeyValuePair<OdCellKey, OdCellValue>>> byPlace, Entity place) =>
+            byPlace.TryGetValue(place, out var l) ? l : new List<KeyValuePair<OdCellKey, OdCellValue>>();
+
+        private List<AreaShare> BuildAreas(List<KeyValuePair<OdCellKey, OdCellValue>> cells, int kind)
+        {
+            // Per cell: drivers, position sum, and the named areas seen there.
+            var perCell = new Dictionary<int2, (int count, float3 sum, Dictionary<Entity, int> areas)>();
+            int total = 0;
+            foreach (KeyValuePair<OdCellKey, OdCellValue> c in cells)
+            {
+                if (c.Key.Kind != kind) continue;
+                if (!perCell.TryGetValue(c.Key.Cell, out var e)) e = (0, float3.zero, new Dictionary<Entity, int>());
+                e.areas.TryGetValue(c.Key.Area, out int n);
+                e.areas[c.Key.Area] = n + c.Value.Count;
+                perCell[c.Key.Cell] = (e.count + c.Value.Count, e.sum + c.Value.PositionSum, e.areas);
+                total += c.Value.Count;
+            }
+            var result = new List<AreaShare>();
+            if (total <= 0) return result;
+
+            // Busiest first; a cell joins the first (busier) seed within kAreaRadius.
+            List<int2> order = perCell.OrderByDescending(x => x.Value.count).Select(x => x.Key).ToList();
+            var taken = new HashSet<int2>();
+            var clusters = new List<(int2 seed, List<int2> members)>();
+            foreach (int2 seed in order)
+            {
+                if (taken.Contains(seed)) continue;
+                taken.Add(seed);
+                var members = new List<int2> { seed };
+                if (seed.y != kOutsideCell)
+                {
+                    float3 seedPos = perCell[seed].sum / perCell[seed].count;
+                    foreach (int2 other in order)
+                    {
+                        if (taken.Contains(other) || other.y == kOutsideCell) continue;
+                        float3 p = perCell[other].sum / perCell[other].count;
+                        if (math.distance(p.xz, seedPos.xz) <= kAreaRadius)
+                        {
+                            members.Add(other);
+                            taken.Add(other);
+                        }
+                    }
+                }
+                clusters.Add((seed, members));
+            }
+            // Name (the costly part: rendering street names) only the areas that are shown.
+            var shownClusters = clusters
+                .Select(cl => (cl.seed, cl.members, count: cl.members.Sum(m => perCell[m].count)))
+                .Where(cl => (double)cl.count / total >= 0.05)
+                .OrderByDescending(cl => cl.count).Take(4).ToList();
+            foreach (var cl in shownClusters)
+            {
+                int2 seed = cl.seed;
+                bool outside = seed.y == kOutsideCell;
+                List<int2> members = cl.members;
+                int count = 0;
+                float3 sum = float3.zero;
+                var areas = new Dictionary<Entity, int>();
+                foreach (int2 m in members)
+                {
+                    count += perCell[m].count;
+                    sum += perCell[m].sum;
+                    foreach (KeyValuePair<Entity, int> a in perCell[m].areas)
+                    {
+                        areas.TryGetValue(a.Key, out int n);
+                        areas[a.Key] = n + a.Value;
+                    }
+                }
+                float3 centre = sum / count;
+                // Spread: weighted distance of the cells from the centre, plus half a cell.
+                double spread = 0;
+                foreach (int2 m in members) spread += perCell[m].count * math.distancesq((perCell[m].sum / perCell[m].count).xz, centre.xz);
+                float radius = math.clamp((float)Math.Sqrt(spread / count) + kAreaCell * 0.5f, 150f, 700f);
+
+                var area = new AreaShare { Share = (double)count / total, HasPosition = true, Position = centre, Radius = outside ? 0f : radius, Outside = outside };
+                NameArea(area, areas, count, total, seed);
+                result.Add(area);
+            }
+            UniqueNames(result);
+            return result;
+        }
+
+        /// <summary>
+        /// Two areas must not share a name: a long street can be the busiest street in both. From the biggest area down,
+        /// each takes its busiest street not yet used by a bigger one; if all are taken, the direction from that one.
+        /// </summary>
+        private static void UniqueNames(List<AreaShare> areas)
+        {
+            var used = new Dictionary<string, float3>();
+            foreach (AreaShare a in areas)
+            {
+                if (a.NameCandidates.Count == 0)
+                {
+                    used[a.Name] = a.Position;
+                    continue;
+                }
+                string street = a.NameCandidates.FirstOrDefault(n => !used.ContainsKey(n));
+                string suffix = a.PlaceCount > 1 ? $" ({a.PlaceCount} streets)" : "";
+                if (street != null)
+                {
+                    a.Name = a.PlaceCount > 1 ? $"around {street}{suffix}" : street;
+                    used[street] = a.Position;
+                    continue;
+                }
+                string top = a.NameCandidates[0];
+                float2 d = a.Position.xz - used[top].xz;
+                // x east, z north.
+                string dir = math.abs(d.x) >= math.abs(d.y) ? (d.x >= 0 ? "east" : "west") : (d.y >= 0 ? "north" : "south");
+                a.Name = $"around {top} ({dir}){suffix}";
+            }
+        }
+
+        private void NameArea(AreaShare area, Dictionary<Entity, int> areas, int count, int total, int2 seed)
+        {
+            // Streets / buildings / districts inside, by name (a street in several pieces counts once), for the tooltip.
+            var byName = new Dictionary<string, (int n, Entity e)>();
+            foreach (KeyValuePair<Entity, int> a in areas)
+            {
+                if (a.Key.Index != kOutsideIndex && !EntityManager.Exists(a.Key)) continue;
+                string name = PlaceName(a.Key);
+                if (string.IsNullOrEmpty(name)) continue;
+                byName.TryGetValue(name, out var v);
+                byName[name] = (v.n + a.Value, v.n >= a.Value ? v.e : a.Key);
+            }
+            var named = byName.OrderByDescending(x => x.Value.n).ToList();
+            area.Streets = named.Take(5).Select(x => new KeyValuePair<string, double>(x.Key, (double)x.Value.n / total)).ToList();
+            if (area.Outside)
+            {
+                string[] sides = { "east", "west", "north", "south" };
+                int side = math.clamp(seed.x - kOutsideCell, 0, 3);
+                area.Name = $"outside the city ({sides[side]})";
+                area.Entity = Outside;
+                // Point on the map edge on that side, in line with where the trips enter.
+                float3 p = area.Position;
+                if (side == 0) p.x = kMapHalfSize; else if (side == 1) p.x = -kMapHalfSize; else if (side == 2) p.z = kMapHalfSize; else p.z = -kMapHalfSize;
+                area.Position = p;
+                return;
+            }
+            if (named.Count == 0)
+            {
+                area.Name = "unnamed area";
+                return;
+            }
+            var top = named[0];
+            area.Entity = top.Value.e;
+            area.PlaceCount = named.Count;
+            bool building = EntityManager.Exists(top.Value.e) && !EntityManager.HasComponent<Aggregate>(top.Value.e) &&
+                            !EntityManager.HasComponent<Game.Areas.District>(top.Value.e);
+            bool district = EntityManager.Exists(top.Value.e) && EntityManager.HasComponent<Game.Areas.District>(top.Value.e);
+            double topShare = (double)top.Value.n / count;
+            if ((building && topShare >= 0.5) || (district && topShare >= 0.6))
+            {
+                area.Name = top.Key;
+                return;
+            }
+            // Named after a street: the final choice (unique among the shown areas) is made in UniqueNames.
+            area.Name = named.Count > 1 ? $"around {top.Key} ({named.Count} streets)" : top.Key;
+            area.NameCandidates = named.Select(x => x.Key).ToList();
         }
 
         private static string AreasText(List<AreaShare> list) =>
             list == null ? "" : string.Join(", ", list.Select(a => $"{a.Name} {a.Share * 100:0}%"));
-
-        /// <summary>A point for an area on the map: junction, street (middle), building, district (centre).</summary>
-        private bool TryAreaPosition(Entity e, out float3 position)
-        {
-            position = default;
-            if (e == Entity.Null || e.Index == kOutsideIndex || !EntityManager.Exists(e)) return false;
-            if (EntityManager.HasComponent<NetNode>(e))
-            {
-                position = EntityManager.GetComponentData<NetNode>(e).m_Position;
-                return true;
-            }
-            if (EntityManager.HasBuffer<Game.Net.AggregateElement>(e))
-            {
-                DynamicBuffer<Game.Net.AggregateElement> edges = EntityManager.GetBuffer<Game.Net.AggregateElement>(e, true);
-                if (edges.Length == 0 || !EntityManager.HasComponent<Curve>(edges[edges.Length / 2].m_Edge)) return false;
-                position = Colossal.Mathematics.MathUtils.Position(EntityManager.GetComponentData<Curve>(edges[edges.Length / 2].m_Edge).m_Bezier, 0.5f);
-                return true;
-            }
-            if (EntityManager.HasComponent<Transform>(e))
-            {
-                position = EntityManager.GetComponentData<Transform>(e).m_Position;
-                return true;
-            }
-            if (EntityManager.HasComponent<Game.Areas.Geometry>(e))
-            {
-                position = EntityManager.GetComponentData<Game.Areas.Geometry>(e).m_CenterPosition;
-                return true;
-            }
-            return false;
-        }
 
         private string TopAreas(Hour h, Entity place, int kind)
         {
@@ -2068,6 +2272,23 @@ namespace LiveTrafficRouting
                     sb.Append('{');
                     TrafficCapture.Str(sb, "n", list[i].Name);
                     TrafficCapture.Str(sb, "id", list[i].Entity == Entity.Null || list[i].Entity.Index == kOutsideIndex ? "" : Id(list[i].Entity));
+                    if (list[i].Streets != null)
+                    {
+                        // An area: where it is (for the camera and the map) and the streets in it (tooltip).
+                        TrafficCapture.Num(sb, "x", Math.Round(list[i].Position.x));
+                        TrafficCapture.Num(sb, "z", Math.Round(list[i].Position.z));
+                        TrafficCapture.Num(sb, "r", Math.Round(list[i].Radius));
+                        sb.Append("\"streets\":[");
+                        for (int k = 0; k < list[i].Streets.Count; k++)
+                        {
+                            if (k > 0) sb.Append(',');
+                            sb.Append('{');
+                            TrafficCapture.Str(sb, "n", list[i].Streets[k].Key);
+                            TrafficCapture.Num(sb, "p", Math.Round(list[i].Streets[k].Value * 100), last: true);
+                            sb.Append('}');
+                        }
+                        sb.Append("],");
+                    }
                     TrafficCapture.Num(sb, "p", list[i].Share < 0 ? -1 : Math.Round(list[i].Share * 100), last: true);
                     sb.Append('}');
                 }
@@ -2209,6 +2430,8 @@ namespace LiveTrafficRouting
                     "longest chain {7} (example head car {8}); to: {9}; from: {10}; through traffic {11} of {12:0} with both ends known.",
                     i + 1, r.Name, r.Kind, Id(r.Place), r.Queued, string.IsNullOrEmpty(r.CauseMix) ? r.Cause : r.CauseMix, r.SpillPct,
                     r.ChainMax, Id(r.ExampleHead), Empty(r.To), Empty(r.From), Pct(r.ThroughPct), r.OdKnown, r.LongWait));
+                // The same trips by single street (as before areas), to compare the grouping.
+                Logger.Info($"     By street: to: {Empty(TopAreas(h, r.Place, 0))}; from: {Empty(TopAreas(h, r.Place, 1))}");
                 if (r.Lanes != null)
                 {
                     Logger.Info($"     Lanes: {Empty(r.Lanes.MovesText)}; {Empty(r.Lanes.LanesText)}; {Empty(r.Lanes.FlowText)}; {r.Lanes.Debug}");

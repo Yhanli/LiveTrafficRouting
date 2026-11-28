@@ -46,8 +46,17 @@ namespace LiveTrafficRouting
         public Entity LinkEnd;            // where they wanted to get to (end of the detour)
         public Entity Junction;           // junction to ring (the place, or where a street queue ends)
         // Where the queued drivers come from and go to: map position and share (0..1).
-        public List<KeyValuePair<float3, float>> Origins = new List<KeyValuePair<float3, float>>();
-        public List<KeyValuePair<float3, float>> Destinations = new List<KeyValuePair<float3, float>>();
+        public List<AreaPoint> Origins = new List<AreaPoint>();
+        public List<AreaPoint> Destinations = new List<AreaPoint>();
+    }
+
+    /// <summary>An origin or destination area on the map: centre, share of the drivers (0..1), size; outside = map edge.</summary>
+    internal struct AreaPoint
+    {
+        public float3 Position;
+        public float Share;
+        public float Radius;
+        public bool Outside;
     }
 
     /// <summary>One area (street, district, building, junction) with its share of a bottleneck's trips.</summary>
@@ -58,6 +67,14 @@ namespace LiveTrafficRouting
         public double Share;      // 0..1
         public bool HasPosition;
         public float3 Position;
+        // Areas (v1.2): size on the map, the streets inside with their share of all drivers, outside the city.
+        public float Radius;
+        public bool Outside;
+        public List<KeyValuePair<string, double>> Streets;
+        // Naming: street names to name the area after, busiest first (empty = the name is fixed: building, district,
+        // outside), and how many named places it has.
+        public List<string> NameCandidates = new List<string>();
+        public int PlaceCount;
     }
 
     /// <summary>

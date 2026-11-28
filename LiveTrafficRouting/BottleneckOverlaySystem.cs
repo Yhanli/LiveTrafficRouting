@@ -224,6 +224,7 @@ namespace LiveTrafficRouting
             public float Outline; // circle drawn as a ring of this width (0 = filled)
             public bool Plain;    // no dark edge (queue lanes: side by side, an edge would show seams between road pieces)
             public bool Soft;     // a long trip arc or its arrowhead (no longer drawn differently)
+            public bool WorldSize; // circle: Width is its real diameter in metres (an area), not scaled with the zoom
         }
 
         private readonly List<Shape> m_Shapes = new List<Shape>();
@@ -271,7 +272,13 @@ namespace LiveTrafficRouting
                 // Zoomed out, every line grows with the camera distance so it keeps the same size on screen (sqrt made the
                 // arcs fade away from far out).
                 float w = sh.Width * zoom;
-                if (sh.Circle && sh.Outline > 0f)
+                if (sh.Circle && sh.WorldSize)
+                {
+                    Color fill = sh.Color;
+                    fill.a *= 0.08f;
+                    buffer.DrawCircle(sh.Color, fill, sh.Outline * zoom, 0, new float2(0f, 1f), sh.Curve.a, sh.Width);
+                }
+                else if (sh.Circle && sh.Outline > 0f)
                 {
                     Color fill = sh.Color;
                     fill.a = 0f;
@@ -373,8 +380,19 @@ namespace LiveTrafficRouting
             // They stop at the edge of the ring (not through its middle, where the turns are drawn).
             // End right at the yellow ring (drawn bigger when zoomed out, so the end moves with it).
             float ringRadius = st.JunctionSize * 0.5f * math.max(1f, m_Zoom * 0.6f) + 2f * math.sqrt(m_Zoom);
-            foreach (KeyValuePair<float3, float> o in view.Origins) AddTripArc(o.Key, Edge(centre, o.Key, ringRadius), st.From, math.lerp(st.TripMin, st.TripMax, o.Value), st, up, atRing: 1);
-            foreach (KeyValuePair<float3, float> d in view.Destinations) AddTripArc(Edge(centre, d.Key, ringRadius), d.Key, st.To, math.lerp(st.TripMin, st.TripMax, d.Value), st, up, atRing: 0);
+            // Each area as a faint circle of its real size; the arc runs between the circle's edge and the ring.
+            foreach (AreaPoint o in view.Origins)
+            {
+                float3 at = AreaPointAt(o, centre);
+                AddAreaCircle(at, o, st.From, up);
+                AddTripArc(o.Outside ? at : Edge(at, centre, o.Radius), Edge(centre, at, ringRadius), st.From, math.lerp(st.TripMin, st.TripMax, o.Share), st, up, atRing: 1);
+            }
+            foreach (AreaPoint d in view.Destinations)
+            {
+                float3 at = AreaPointAt(d, centre);
+                AddAreaCircle(at, d, st.To, up);
+                AddTripArc(Edge(centre, at, ringRadius), d.Outside ? at : Edge(at, centre, d.Radius), st.To, math.lerp(st.TripMin, st.TripMax, d.Share), st, up, atRing: 0);
+            }
             foreach (KeyValuePair<Entity, float> q in view.QueueLanes)
             {
                 if (!TryCurve(q.Key, out Bezier4x3 c)) continue;
@@ -383,15 +401,8 @@ namespace LiveTrafficRouting
                 col.a *= 0.3f + 0.7f * q.Value;
                 Lift(ref c, up);
                 m_Shapes.Add(new Shape { Curve = c, Color = col, Width = st.QueueWidth, Plain = true });
-                // Arrows show which way the queue drives (so "turn right" can be checked on the map). Lane curves run in
-                // the driving direction; short pieces get none, to keep junctions readable.
-                if (EntityManager.GetComponentData<Curve>(q.Key).m_Length >= 40f)
-                {
-                    Color arrow = st.Queue;
-                    arrow.a = math.max(arrow.a, 0.9f);
-                    AddArrowHead(c, arrow, st.QueueWidth, st.ArrowLength * 1.5f * m_Zoom);
-                }
             }
+            AddQueueArrows(view, st, up, centre);
             foreach (TurnView t in view.Turns)
             {
                 // Only turns the queue uses (unused ones made busy junctions hard to read), at the ringed junction.
@@ -420,6 +431,76 @@ namespace LiveTrafficRouting
                 weight += t.Share;
             }
             return weight > 0f ? sum / weight : node;
+        }
+
+        /// <summary>
+        /// Arrows showing which way the queue drives (so "turn right" can be checked on the map): on one lane per road
+        /// piece (the busiest), every ChevronSpacing metres of distance from the front of the queue (more apart when zoomed
+        /// out, so the same few show on screen), plus one at the front. One per lane piece made a red fringe far out.
+        /// </summary>
+        private void AddQueueArrows(OverlayView view, Style st, float3 up, float3 head)
+        {
+            var best = new Dictionary<Entity, KeyValuePair<Entity, float>>();
+            foreach (KeyValuePair<Entity, float> q in view.QueueLanes)
+            {
+                if (!EntityManager.HasComponent<Game.Common.Owner>(q.Key)) continue;
+                Entity piece = EntityManager.GetComponentData<Game.Common.Owner>(q.Key).m_Owner;
+                if (!best.TryGetValue(piece, out var b) || q.Value > b.Value) best[piece] = q;
+            }
+            Color arrow = st.Queue;
+            arrow.a = math.max(arrow.a, 0.9f);
+            float len = st.ArrowLength * m_Zoom;
+            float spacing = st.ChevronSpacing * math.max(1f, m_Zoom);
+            int drawn = 0;
+            Bezier4x3 front = default;
+            float frontDist = float.MaxValue;
+            foreach (var b in best.Values)
+            {
+                if (!TryCurve(b.Key, out Bezier4x3 c)) continue;
+                Lift(ref c, up);
+                float dA = math.distance(c.a.xz, head.xz), dD = math.distance(c.d.xz, head.xz);
+                if (dD < frontDist)
+                {
+                    frontDist = dD;
+                    front = c;
+                }
+                // The multiples of the spacing that fall on this piece: an arrow at each.
+                int k0 = (int)math.ceil(math.min(dA, dD) / spacing), k1 = (int)math.floor(math.max(dA, dD) / spacing);
+                for (int k = math.max(1, k0); k <= k1 && drawn < 24; k++)
+                {
+                    float target = k * spacing, bestT = 1f, bestErr = float.MaxValue;
+                    for (int i = 1; i <= 16; i++)
+                    {
+                        float t = i / 16f;
+                        float err = math.abs(math.distance(Colossal.Mathematics.MathUtils.Position(c, t).xz, head.xz) - target);
+                        if (err < bestErr)
+                        {
+                            bestErr = err;
+                            bestT = t;
+                        }
+                    }
+                    AddArrowHead(Colossal.Mathematics.MathUtils.Cut(c, new float2(0f, bestT)), arrow, st.QueueWidth * 0.8f, len);
+                    drawn++;
+                }
+            }
+            if (frontDist < float.MaxValue) AddArrowHead(front, arrow, st.QueueWidth * 0.8f, len);
+        }
+
+        /// <summary>An area's centre at the junction's height (areas are recorded without a reliable height).</summary>
+        private static float3 AreaPointAt(AreaPoint a, float3 centre)
+        {
+            float3 p = a.Position;
+            p.y = centre.y;
+            return p;
+        }
+
+        private void AddAreaCircle(float3 at, AreaPoint a, Color color, float3 up)
+        {
+            if (a.Outside || a.Radius <= 0f) return;
+            Color c = color;
+            c.a *= 0.6f;
+            float3 p = at + up;
+            m_Shapes.Add(new Shape { Curve = new Bezier4x3(p, p, p, p), Color = c, Width = a.Radius * 2f, Circle = true, Outline = 1.2f, WorldSize = true });
         }
 
         /// <summary>The point at this distance from the centre towards another point (the edge of the junction).</summary>

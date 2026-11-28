@@ -52,7 +52,8 @@ interface Roadworks { cleared: number; roads: MarkedRoad[]; }
 interface Hotspot { p: string; k: string; q: number; j: number; h: number; x?: number; z?: number; }
 // Bottleneck finder (BottleneckSystem.cs): the last finished game hour.
 // A street, district, building or junction with an entity id ("" = not on the map, e.g. outside the city) and a share.
-interface Area { n: string; id: string; p?: number; }
+// An origin / destination area (v1.2) also has its centre (x, z), size (r, metres) and the streets in it.
+interface Area { n: string; id: string; p?: number; x?: number; z?: number; r?: number; streets?: { n: string; p: number }[]; }
 interface BottleneckRow {
     id: string; place: string; kind: string; cause: string; mix: string; queued: number; wait?: number; spill: number; through: number;
     to: string; from: string; moves?: string; lanes?: string; flow?: string; advice?: string;
@@ -108,7 +109,7 @@ const PLACE_LEGEND: LegendItem[] = [
     { color: "rgb(242,242,242)", text: "straight" },
     { color: "rgb(191,102,255)", text: "turn right" },
     { color: "rgb(255,217,51)", text: "U-turn" },
-    { color: "rgb(77,217,255)", text: "coming from" },
+    { color: "rgb(77,217,255)", text: "coming from (circle = the area)" },
     { color: "rgb(255,115,217)", text: "going to" },
 ];
 function linkLegendItems(l: LinkHint): LegendItem[] {
@@ -137,16 +138,35 @@ const Legend = ({ items }: { items: LegendItem[] }) => (
 );
 
 /** Clickable names: each one moves the camera there. Names off the map (outside the city) are plain. */
+const chipText = (a: Area) => (a.p !== undefined && a.p >= 0 ? `${a.n} ${fmt(a.p, 0)}%` : a.n);
+/** An area chip: moves the camera to the area's centre; the tooltip lists the streets in it. */
+const AreaChip = ({ a }: { a: Area }) => {
+    const chip = <div className={styles.chip} onClick={() => trigger(GROUP, "focusPoint", `${a.x}|${a.z}`)}>{chipText(a)}</div>;
+    if (!a.streets || a.streets.length === 0) return chip;
+    return (
+        <Tooltip tooltip={<div className={styles.tip}>
+            <div className={styles.tipTitle}>{a.n}</div>
+            {a.streets.map(s => <div key={s.n}>{`${s.n}: ${fmt(s.p, 0)}% of the drivers`}</div>)}
+            <div className={styles.tipNote}>{"Click to move the camera there. The circle on the map shows the area."}</div>
+        </div>}>{chip}</Tooltip>
+    );
+};
 const Chips = ({ label, items }: { label: string; items: Area[] }) => (
     <div className={styles.chipRow}>
         <div className={styles.chipLabel}>{label}</div>
         {items.length === 0 ? <div className={styles.chipPlain}>{"unknown"}</div> : items.map(a => (
-            a.id
-                ? <div key={a.n} className={styles.chip} onClick={() => trigger(GROUP, "focusEntity", a.id)}>{a.p !== undefined && a.p >= 0 ? `${a.n} ${fmt(a.p, 0)}%` : a.n}</div>
-                : <div key={a.n} className={styles.chipPlain}>{a.p !== undefined && a.p >= 0 ? `${a.n} ${fmt(a.p, 0)}%` : a.n}</div>
+            a.x !== undefined && a.z !== undefined ? <AreaChip key={a.n} a={a} />
+                : a.id
+                ? <div key={a.n} className={styles.chip} onClick={() => trigger(GROUP, "focusEntity", a.id)}>{chipText(a)}</div>
+                : <div key={a.n} className={styles.chipPlain}>{chipText(a)}</div>
         ))}
     </div>
 );
+/** "Going to (these cover 74%):" when the list doesn't cover nearly everyone. */
+const coverLabel = (label: string, items: Area[]) => {
+    const covered = items.reduce((s, a) => s + (a.p !== undefined && a.p > 0 ? a.p : 0), 0);
+    return items.length > 0 && covered > 0 && covered < 95 ? `${label} (these cover ${fmt(covered, 0)}%):` : `${label}:`;
+};
 interface Run { id: string; mode: string; preset: string; settings: string; first: string; last: string; hours: number; pinned?: number; baseline?: number; }
 
 /** Averages over a set of game hours. */
@@ -1127,8 +1147,8 @@ export const LiveTrafficPanel = () => {
                                             {r.moves ? <div className={styles.note}>{r.moves}</div> : null}
                                             {r.lanes ? <div className={styles.note}>{r.lanes}</div> : null}
                                             {r.flow ? <div className={styles.note}>{r.flow}</div> : null}
-                                            <Chips label="Going to:" items={r.toList ?? []} />
-                                            <Chips label="Coming from:" items={r.fromList ?? []} />
+                                            <Chips label={coverLabel("Going to", r.toList ?? [])} items={r.toList ?? []} />
+                                            <Chips label={coverLabel("Coming from", r.fromList ?? [])} items={r.fromList ?? []} />
                                             <div className={styles.note}>{`Passing through (start and end over 1 km away): ${r.through < 0 ? "unknown" : fmt(r.through, 0) + "%"}.${(r.trucks ?? 0) >= 10 ? ` Trucks: ${fmt(r.trucks ?? 0, 0)}% of the queued vehicles.` : ""}`}</div>
                                             {(r.despawns ?? 0) > 0 ? <div className={styles.advice}>{`The game removed ${fmt(r.despawns ?? 0, 1)} stuck cars ${ongoing ? "per hour" : "last hour"} in these queues (cars stuck too long simply vanish).`}</div> : null}
                                             {seen.map(t => <div key={t} className={styles.advice}>{t}</div>)}

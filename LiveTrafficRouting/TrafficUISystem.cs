@@ -41,6 +41,23 @@ namespace LiveTrafficRouting
             AddBinding(new TriggerBinding<string>(Group, "deleteRun", StatisticsReset.DeleteRun));
             AddBinding(new TriggerBinding<string>(Group, "togglePin", TrafficReportStore.TogglePin));
             AddBinding(new TriggerBinding<string>(Group, "focusPlace", FocusPlace));
+            // "x|z": a map point (an origin / destination area), camera only.
+            AddBinding(new TriggerBinding<string>(Group, "focusPoint", xz =>
+            {
+                string[] parts = xz.Split('|');
+                if (parts.Length != 2 ||
+                    !float.TryParse(parts[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float x) ||
+                    !float.TryParse(parts[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float z)) return;
+                float y = 0f;
+                try
+                {
+                    var terrain = World.GetOrCreateSystemManaged<Game.Simulation.TerrainSystem>();
+                    Game.Simulation.TerrainHeightData heights = terrain.GetHeightData(true);
+                    y = Game.Simulation.TerrainUtils.SampleHeight(ref heights, new Unity.Mathematics.float3(x, 0f, z));
+                }
+                catch (System.Exception) { /* height is cosmetic */ }
+                MoveCameraTo(new Unity.Mathematics.float3(x, y, z));
+            }));
 
             // Temporary roadworks (marks are not saved).
             m_RoadMarkSystem = World.GetOrCreateSystemManaged<RoadMarkSystem>();
@@ -168,7 +185,11 @@ namespace LiveTrafficRouting
         /// </summary>
         private void MoveCameraTo(Entity entity)
         {
-            if (!TryPositionOf(entity, out Unity.Mathematics.float3 position)) return;
+            if (TryPositionOf(entity, out Unity.Mathematics.float3 position)) MoveCameraTo(position);
+        }
+
+        private void MoveCameraTo(Unity.Mathematics.float3 position)
+        {
             var camera = World.GetOrCreateSystemManaged<Game.Rendering.CameraUpdateSystem>();
             if (camera.gamePlayController == null) return;
             World.GetOrCreateSystemManaged<SelectedInfoUISystem>().SetSelection(Entity.Null);
