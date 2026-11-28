@@ -53,11 +53,17 @@ user corrects something new, add it here.
 - Lines are smooth lane curves with rounded caps, never chains of straight segments. Turns are drawn along the
   game's junction lane curves, only the turns the queue uses (>2%), within 120 m of the ring.
 - Long dashed arcs for "coming from" (cyan) and "going to" (pink): the user prefers them to short stubs. Arcs end at the
-  ring's edge, at the ring's height.
+  ring's edge, at the ring's height. Origins and destinations are areas (~1 km): each is a faint circle of its real
+  size (`WorldSize`, not zoom-scaled) and the arc starts / ends at the circle's edge; outside the city has no circle.
+- Area chips move the camera to the area centre (`focusPoint`), with a tooltip listing the streets in the area; a list
+  that doesn't cover nearly everyone says so ("these cover 74%").
 - The yellow ring marks where the queue enters the junction (start of the turns it uses), not the junction centre.
 - Widths scale with camera distance (zoom factor clamp(dist/400, 0.12, 12)): thin up close, same on-screen size far
   out. Arrowheads small. Outlines are drawn in a first pass and fills in a second (no dark dots at joints).
-- The queue line has direction arrows. Colours match the panel legend exactly; update the legend when colours change.
+- The queue line has direction arrows, but sparse: one lane per road piece, spaced by distance from the queue's
+  front (spacing grows with zoom), plus one at the front. One arrow per lane piece looked like red fuzz far out.
+- Area names must be unique among the shown areas (a long street can top two areas): next street, else a direction.
+- Colours match the panel legend exactly; update the legend when colours change.
 - Style values live in `ModsData/LiveTrafficRouting/overlay-style.txt` (hot reload). When changing defaults, bump
   `kStyleVersion` so players get the new file (old one kept as `overlay-style.old.txt`). For quick tuning while the
   game runs, edit the live file instead of rebuilding.

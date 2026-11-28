@@ -150,6 +150,17 @@ How it reads the game is in research.md section 8. The choices:
   ramp also faces back). Missing turn when the ends are within 3 road pieces; otherwise a new road (ramp if it meets a
   highway). Same street at both ends reads "shortcut across a bend of X". "A to B" and "B to A" are one idea.
 
+### Where drivers come from and go to
+
+- **Areas of about 1 km, not single streets** (v1.2, 2026-11-28). Per street, one neighbourhood split into many small
+  entries and only the top 3 showed; street middles made poor map points; "outside the city" was one lump with no
+  position; the ongoing view showed only the latest hour. Now trips are counted on a 250 m grid with the named place
+  found there, grouped at the end of the hour (busiest cell first, cells within 500 m join it), and named: a building
+  or lot with half the area keeps its name (cargo stations matter), a district with 60%, else "around <top street>
+  (N streets)"; outside the city per map side. Top 4 with 5%+, the label says how much they cover, the tooltip lists
+  the streets inside (the user asked to keep them visible), and the ongoing view adds up the whole window. The
+  hourly log prints the old by-street lists next to the areas for comparison.
+
 ## Map overlay
 
 - **Long coming-from / going-to arcs** (2026-11-26, user preference): they show clearly where traffic comes from and

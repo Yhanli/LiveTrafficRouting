@@ -17,6 +17,7 @@ In the base game, drivers only learn very slowly (over game days) which roads ar
 - New in 1.1: an **Auto** preset that tunes itself to your city, one small tested step at a time.
 - New in 1.1: **Temporary roadworks** (in the statistics panel): close a road for traffic, or ask drivers to avoid or prefer it, to test your network without deleting anything. These marks are temporary: they are not saved and are cleared when you load a save.
 - New in 1.1: a **bottleneck finder** (statistics panel, Causes tab): where each queue actually starts and why (traffic lights, turning across oncoming traffic, give way, lanes merging, people crossing, buses or service vehicles stopping in the lane, and more), shown on the map with the lanes and turns of the junction, where the stuck drivers come from and go to, and what you can do about it: lane and turn advice, and new roads or missing turns that would let the drivers skip the queue. It ranks problems over the last 24 game hours and tells you when a fix worked.
+- New in 1.2: the bottleneck finder shows where the stuck drivers come from and go to as **areas** of about 1 km instead of single streets (named after a big building, a district or the main street, with the streets inside when you hover), traffic from outside the city per map side, and each area as a circle on the map.
 
 **Tested results (version 1.1, one city, the same save and the same 49 game hours, compared with the mod off; your city will differ with its road network)**
 - Balanced: about 64% fewer jam warnings, 18% fewer vehicles waiting in queues, real driving speed up about 8%, and 16% fewer cars that the game removes because they are stuck.
@@ -53,11 +54,12 @@ Especially from big cities (250k+) and players using other traffic mods. Please 
 	<Screenshot Value="Properties/Screenshots/6-rerouting.jpg" />
 	<Tag Value="Code Mod" />
 	<ForumLink Value="" />
-	<ModVersion Value="1.1.0" />
+	<ModVersion Value="1.2.0" />
 	<GameVersion Value="1.6.*" />
 	<Dependency Id="" />
 	<RequiredDLC Value="" />
 	<ChangeLog>
+1.2.0: Bottleneck finder: where the stuck drivers come from and go to is shown as areas of about 1 km instead of single streets (named after a big building or lot, a district, or the main street, with the streets inside on hover), outside traffic per map side, shown on the map as circles; the 24-hour view adds up the whole window.
 1.1.0: Traffic forecast ("Spread drivers over detours": roads many drivers are heading for look busier before they jam), "Keep through traffic out of neighbourhoods", emergency vehicles re-route, re-routes (also in a standing jam) wait for a junction with a real choice and never start inside a junction, the re-route limit follows how busy the route planner is, a self-tuning Auto preset, temporary roadworks (close, avoid or prefer a road; not saved). Statistics panel: bottleneck finder (Causes tab: where queues start and why, with a map view of lanes, turns and where drivers come from and go to, lane and junction advice, new road and turn ideas that let drivers skip the queue, a 24-hour ranking that shows when a fix worked), how people travel (car share, walking, cycling, public transport, waiting for a route), vehicles the game removes when stuck and where, traffic news, Copy summary. Fixes: local streets are now recognised correctly (the game stores speed limits at about twice the shown value), cyclists are no longer counted as car passengers, the previous session's log is kept. The new settings start from first estimates and are still being tested.
 1.0.0: First release: live traffic routing, re-routing while driving for cars, delivery trucks and taxis, presets (Relaxed, Balanced, Eager), and an optional statistics panel for traffic geeks.
 	</ChangeLog>

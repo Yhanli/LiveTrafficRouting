@@ -8,7 +8,7 @@ namespace LiveTrafficRouting
     public class Mod : IMod
     {
         /// <summary>Keep equal to ModVersion in Properties/PublishConfiguration.xml (tools\check.ps1 checks it).</summary>
-        internal const string Version = "1.1.0";
+        internal const string Version = "1.2.0";
 
         internal static LiveTrafficSettings Settings { get; private set; }
 

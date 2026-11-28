@@ -146,8 +146,13 @@ Where to see them:
     the 24-hour average), or **cleared** when it had no queue for 3 game hours (a fix that worked shows here at once;
     cleared places move to the bottom and leave once their old hours are out of the window). "This hour" shows the
     last hour only. A street queue names the junction it ends at and gets
-    that junction's lane and turn advice. Going to / coming from / streets are clickable (camera moves there, no
-    selection pin) and drawn on the map as dashed arcs (cyan from, pink to).
+    that junction's lane and turn advice. Going to / coming from are **areas of about 1 km** (v1.2): trips are
+    grouped by where they start and end, and each area is named after a building or lot that makes up half of it
+    (e.g. a cargo station), a district that makes up most of it, or its top street ("around Sycamore Street
+    (9 streets)"); outside the city is split by map side. Hover an area for the streets in it, click it to move the
+    camera there. The ongoing view adds up the whole 24-hour window. On the map each area is a faint circle with a
+    dashed arc to the junction (cyan from, pink to). Street names in the details are clickable too (camera only, no
+    selection pin).
     Overlay colours and widths: `ModsData/LiveTrafficRouting/overlay-style.txt`, re-read while the game runs. Each
     shown overlay is also written to `overlay-preview.json`.
   - **Despawns** (v1.1, Compare metrics): vehicles the game removed per game hour because they were stuck (vanilla
